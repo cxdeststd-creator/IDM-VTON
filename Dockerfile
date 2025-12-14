@@ -1,25 +1,27 @@
-# RunPod'un hazır PyTorch imajını kullan (Hızlı açılır)
+# RunPod'un en stabil PyTorch imajını kullanıyoruz
 FROM runpod/pytorch:2.2.0-py3.10-cuda12.1.1-devel-ubuntu22.04
 
-# Çalışma klasörüne geç
+# Çalışma klasörünü ayarla
 WORKDIR /app
 
-# Gerekli sistem araçlarını kur
-RUN apt-get update && apt-get install -y git wget
+# --- FİKS BURADA: Önce sistem araçlarını kuruyoruz ---
+# Bu satır opencv ve diğer kütüphanelerin "build failed" hatasını çözer
+RUN apt-get update && apt-get install -y \
+    git \
+    wget \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    build-essential \
+    python3-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# IDM-VTON Reposunu çek (Eğer senin kendi kodun varsa burayı silip COPY . . yapabilirsin)
-RUN git clone https://github.com/yisol/IDM-VTON.git .
+# Dosyaları kopyala
+COPY . .
 
-# Python kütüphanelerini kur
-RUN pip install -r requirements.txt
-RUN pip install runpod  # Serverless için şart!
-
-# Modelleri İndir (Bu kısım çok önemli, yoksa her açılışta indirir yavaşlar)
-# (Buraya huggingface-cli veya wget ile model indirme komutlarını eklemen lazım)
-# Örn: RUN wget https://huggingface.co/yisol/IDM-VTON/resolve/main/unet/diffusion_pytorch_model.bin ...
-
-# Handler kodunu kopyala
-COPY handler.py /app/handler.py
+# Şimdi Python kütüphanelerini kur (Artık hata vermez)
+RUN pip install --no-cache-dir --upgrade pip
+RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install runpod
 
 # Başlat
-CMD [ "python", "-u", "/app/handler.py" ]
+CMD [ "python", "-u", "handler.py" ]
