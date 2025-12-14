@@ -1,0 +1,7 @@
+{
+  "version": "1.0.0",
+  "imageName": "benim-idm-vton-worker",
+  "env": {
+    "CUDA_VISIBLE_DEVICES": "0"
+  }
+}
