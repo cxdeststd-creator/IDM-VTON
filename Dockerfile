@@ -24,6 +24,8 @@ RUN pip install --upgrade pip
 # --ignore-installed bayrağıyla çakışmaları zorla geçiyoruz
 RUN pip install --no-cache-dir --ignore-installed -r requirements.txt
 RUN pip install runpod
+RUN python3 builder.py
+# ---------------------------
 
-# 4. Handler'ı başlat
+# Handler'ı başlat
 CMD [ "python", "-u", "handler.py" ]
