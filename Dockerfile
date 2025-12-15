@@ -1,14 +1,13 @@
-# 1. RunPod'un en sağlam PyTorch imajı (Senin verdiğin base)
+# 1. Base Image (RunPod)
 FROM runpod/pytorch:2.2.0-py3.10-cuda12.1.1-devel-ubuntu22.04
 
-# Çalışma klasörü
 WORKDIR /app
 
-# Ortam Değişkenleri (Hata almamak için)
+# Ortam Değişkenleri
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
-# 2. SİSTEM GEREKSİNİMLERİ
+# 2. Sistem Kütüphaneleri
 RUN apt-get update && apt-get install -y \
     git \
     wget \
@@ -20,30 +19,29 @@ RUN apt-get update && apt-get install -y \
     python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# 3. KRİTİK ADIM: İstediğin Torch Versiyonunu Zorla Çakıyoruz 🔨
-# Base imajda gelen torch 2.2'yi siler, senin istediğin 2.0.1'i kurar.
-# "nms does not exist" hatasını çözen satır burası.
-RUN pip install torch==2.0.1 torchvision==0.15.2 --index-url https://download.pytorch.org/whl/cu118 --no-cache-dir --force-reinstall
+# 3. TEMİZLİK VE KURULUM (Hatanın Çözümü Burası) 🧹
+# Önce sistemdeki tüm torch ailesini siliyoruz (torchaudio çakışmasın diye).
+# Sonra temiz bir şekilde 2.0.1 ve 0.15.2 kuruyoruz.
+RUN pip uninstall -y torch torchvision torchaudio && \
+    pip install torch==2.0.1 torchvision==0.15.2 --index-url https://download.pytorch.org/whl/cu118 --no-cache-dir
 
-# 4. PYTHON KÜTÜPHANELERİNİ KURMA
+# 4. Kütüphaneleri Kur
 COPY requirements.txt .
 
-# requirements.txt içinde torch varsa sil, yoksa bizim kurduğumuzu bozar.
-# Sonra geri kalanları kur.
+# requirements.txt içinden torch'u siliyoruz ki bizim kurduğumuzu bozmasın.
 RUN sed -i '/torch/d' requirements.txt && \
     pip install --upgrade pip && \
     pip install --no-cache-dir --ignore-installed -r requirements.txt
 
-# RunPod ve HuggingFace (Gerekirse)
+# RunPod/HF kütüphaneleri
 RUN pip install runpod huggingface_hub
 
-# 5. MODEL İNDİRME AŞAMASI (BUILDER)
+# 5. Builder (Model İndirme)
 COPY builder.py .
-# Bu scriptin içindeki indirme fonksiyonları çalışacak
 RUN python3 builder.py
 
-# 6. KALAN TÜM DOSYALARI KOPYALA
+# 6. Kalan Dosyalar
 COPY . .
 
-# 7. BAŞLAT
+# 7. Başlat
 CMD [ "python", "-u", "handler.py" ]
