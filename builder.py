@@ -1,37 +1,22 @@
 # builder.py
-import torch
-from diffusers import StableDiffusionXLInpaintPipeline
-from diffusers import UNet2DConditionModel
+import os
+from huggingface_hub import snapshot_download
 
 def download_model():
     # Model ID
     model_id = "yisol/IDM-VTON"
     
-    print("⏳ Model indiriliyor, bu işlem build sırasında 1 kere yapılır...")
+    print(f"⏳ {model_id} indiriliyor... (Sadece dosyalar çekilecek)")
     
-    # UNet'leri indir
-    UNet2DConditionModel.from_pretrained(
-        model_id,
-        subfolder="unet",
-        torch_dtype=torch.float16
+    # Modeli cache klasörüne indir
+    # allow_patterns ile sadece ihtiyacımız olanları çekiyoruz ki gereksiz şişmesin
+    snapshot_download(
+        repo_id=model_id,
+        ignore_patterns=["*.msgpack", "*.h5", "*.safetensors"], # PyTorch bin dosyalarını alalım
+        allow_patterns=["*.bin", "*.json", "*.txt", "*.png", "*config.json"]
     )
     
-    UNet2DConditionModel.from_pretrained(
-        model_id,
-        subfolder="unet_garm",
-        torch_dtype=torch.float16
-    )
-    
-    # Pipeline'ın geri kalanını indir (VAE, Scheduler, vb.)
-    # Not: TryonPipeline class'ı özel olduğu için standart SDXL indiriyoruz
-    # Bu sayede cache dolar.
-    print("⏳ VAE ve Encoderlar indiriliyor...")
-    StableDiffusionXLInpaintPipeline.from_pretrained(
-        model_id,
-        torch_dtype=torch.float16
-    )
-    
-    print("✅ Tüm modeller indirildi ve Cache'lendi!")
+    print("✅ Model dosyaları başarıyla cache'lendi!")
 
 if __name__ == "__main__":
     download_model()
