@@ -23,13 +23,12 @@ def ensure_ckpts():
     ]
 
     for file in ckpt_files:
-        local_path = os.path.join("IDM-VTON", file)
-        if not os.path.exists(local_path):
+        if not os.path.exists(file):
             print(f"⬇️ Downloading {file}")
             hf_hub_download(
                 repo_id=BASE_REPO,
                 filename=file,
-                local_dir="IDM-VTON",
+                local_dir=".",          # 🔴 KRİTİK
                 local_dir_use_symlinks=False
             )
 
