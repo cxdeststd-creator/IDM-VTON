@@ -1,22 +1,33 @@
-# builder.py
 import os
-from huggingface_hub import snapshot_download
+import requests
 
-def download_model():
-    # Model ID
-    model_id = "yisol/IDM-VTON"
+def download_file(url, path):
+    if os.path.exists(path):
+        print(f"✅ Dosya zaten var: {path}")
+        return
     
-    print(f"⏳ {model_id} indiriliyor... (Sadece dosyalar çekilecek)")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    print(f"⬇️ İndiriliyor: {path}...")
     
-    # Modeli cache klasörüne indir
-    # allow_patterns ile sadece ihtiyacımız olanları çekiyoruz ki gereksiz şişmesin
-    snapshot_download(
-        repo_id=model_id,
-        ignore_patterns=["*.msgpack", "*.h5", "*.safetensors"], # PyTorch bin dosyalarını alalım
-        allow_patterns=["*.bin", "*.json", "*.txt", "*.png", "*config.json"]
-    )
-    
-    print("✅ Model dosyaları başarıyla cache'lendi!")
+    try:
+        response = requests.get(url, stream=True)
+        if response.status_code == 200:
+            with open(path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=1024*1024):
+                    if chunk: f.write(chunk)
+            print(f"🎉 İndirme tamamlandı: {path}")
+        else:
+            print(f"❌ HATA: Link bozuk ({response.status_code}): {url}")
+    except Exception as e:
+        print(f"❌ HATA: {e}")
 
-if __name__ == "__main__":
-    download_model()
+# 1. HumanParsing Modelleri
+download_file("https://huggingface.co/spaces/yisol/IDM-VTON/resolve/main/ckpt/humanparsing/parsing_atr.onnx", "ckpt/humanparsing/parsing_atr.onnx")
+download_file("https://huggingface.co/spaces/yisol/IDM-VTON/resolve/main/ckpt/humanparsing/parsing_lip.onnx", "ckpt/humanparsing/parsing_lip.onnx")
+
+# 2. OpenPose Modelleri (ControlNet Orijinal)
+download_file("https://huggingface.co/lllyasviel/ControlNet/resolve/main/annotator/ckpts/body_pose_model.pth", "ckpt/openpose/body_pose_model.pth")
+download_file("https://huggingface.co/lllyasviel/ControlNet/resolve/main/annotator/ckpts/hand_pose_model.pth", "ckpt/openpose/hand_pose_model.pth")
+
+# 3. DensePose Modeli (Facebook Orijinal Sunucusu - ASLA BOZULMAZ)
+download_file("https://dl.fbaipublicfiles.com/densepose/densepose_rcnn_R_50_FPN_s1x/165712039/model_final_162be9.pkl", "ckpt/densepose/model_final_162be9.pkl")
