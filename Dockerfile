@@ -1,12 +1,14 @@
-FROM runpod/pytorch:2.1.0-cuda11.8.0-runtime
+FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 WORKDIR /app
 
 # -----------------------------
-# System dependencies
+# System deps
 # -----------------------------
 RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
     git \
     wget \
     unzip \
@@ -15,9 +17,17 @@ RUN apt-get update && apt-get install -y \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
+RUN ln -s /usr/bin/python3 /usr/bin/python
+
 # -----------------------------
-# Python dependencies (FINAL)
+# Python deps (FINAL LOCK)
 # -----------------------------
+RUN pip install --no-cache-dir \
+    torch==2.1.0+cu118 \
+    torchvision==0.16.0+cu118 \
+    torchaudio==2.1.0+cu118 \
+    --extra-index-url https://download.pytorch.org/whl/cu118
+
 RUN pip install --no-cache-dir \
     diffusers==0.25.1 \
     transformers==4.36.2 \
@@ -44,6 +54,32 @@ WORKDIR /app/IDM-VTON
 # Download checkpoints
 # -----------------------------
 RUN mkdir -p ckpt && \
-    wget -q https://huggingface.co/yisol/IDM-VTON/resolve/main/ckpt/densepose.zip -O densepose.zip && \
-    wget -q https://huggingface.co/yisol/IDM-VTON/resolve/main/ckpt/humanparsing.zip -O humanparsing.zip && \
-    wget
+    wget https://huggingface.co/yisol/IDM-VTON/resolve/main/ckpt/densepose.zip && \
+    wget https://huggingface.co/yisol/IDM-VTON/resolve/main/ckpt/humanparsing.zip && \
+    wget https://huggingface.co/yisol/IDM-VTON/resolve/main/ckpt/openpose.zip && \
+    unzip densepose.zip -d ckpt && \
+    unzip humanparsing.zip -d ckpt && \
+    unzip openpose.zip -d ckpt && \
+    rm *.zip
+
+# -----------------------------
+# Fix BROKEN ONNX (CRITICAL)
+# -----------------------------
+RUN python - <<EOF
+from huggingface_hub import hf_hub_download
+hf_hub_download(
+    repo_id="yisol/IDM-VTON",
+    filename="ckpt/humanparsing/parsing_atr.onnx",
+    force_download=True,
+    local_dir=".",
+    local_dir_use_symlinks=False
+)
+print("ONNX fixed")
+EOF
+
+# -----------------------------
+# RunPod serverless
+# -----------------------------
+COPY handler.py /app/IDM-VTON/handler.py
+
+CMD ["python", "-u", "/usr/local/lib/python3.10/dist-packages/runpod/serverless/start.py"]
