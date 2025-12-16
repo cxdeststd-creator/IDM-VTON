@@ -29,4 +29,4 @@ RUN pip install -r requirements.txt --no-cache-dir
 COPY . .
 
 # 6. Başlat
-CMD ["python", "app.py"]
+CMD [ "python", "-u", "handler.py" ]
