@@ -33,15 +33,20 @@ from diffusers.loaders import (
     StableDiffusionXLLoraLoaderMixin,
     TextualInversionLoaderMixin,
 )
+# Hata yapan eski importların hepsini sil, yerine bunu koy:
 from diffusers.models import AutoencoderKL, UNet2DConditionModel
 from diffusers.models.embeddings import ImageProjection
 from diffusers.models.attention_processor import (
     AttnProcessor2_0,
     LoRAAttnProcessor2_0,
     LoRAXFormersAttnProcessor,
-    XFormer
+    XFormersAttnProcessor
 )
+
+# XFormer ve FusedAttnProcessor2_0 artık yok, onları mevcut olana yönlendiriyoruz:
+# (Bu satırlar parantezin DIŞINDA ve en sola dayalı olmalı)
 FusedAttnProcessor2_0 = AttnProcessor2_0
+XFormer = XFormersAttnProcessor
 from diffusers.models.lora import adjust_lora_scale_text_encoder
 from diffusers.schedulers import KarrasDiffusionSchedulers
 from diffusers.utils import (
