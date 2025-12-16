@@ -37,10 +37,9 @@ from diffusers.models import AutoencoderKL, UNet2DConditionModel
 from diffusers.models.embeddings import ImageProjection
 from diffusers.models.attention_processor import (
     AttnProcessor2_0,
-    FusedAttnProcessor2_0,
     LoRAAttnProcessor2_0,
     LoRAXFormersAttnProcessor,
-    XFormersAttnProcessor,
+    XFormer
 )
 from diffusers.models.lora import adjust_lora_scale_text_encoder
 from diffusers.schedulers import KarrasDiffusionSchedulers
