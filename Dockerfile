@@ -1,30 +1,32 @@
-# Python 3.10 tabanlı hafif imaj (Gereksiz çöplerden arınmış)
-FROM python:3.10-slim
+# 1. Slim yerine TAM sürüm kullanıyoruz (Hata riskini azaltır, biraz daha büyük boyuttur ama çalışır)
+FROM python:3.10
 
-# Çalışma dizinini ayarla
+# Çalışma dizini
 WORKDIR /app
 
-# 1. SİSTEM BAĞIMLILIKLARI
-# OpenCV ve Insightface'in çalışması (ve derlenmesi) için bunlar ŞART.
-# Yoksa "libGL.so not found" veya "gcc failed" hatası alırsın.
-RUN apt-get update && apt-get install -y \
+# 2. SİSTEM KÜTÜPHANELERİ
+# "libgl1-mesa-glx" yerine "libgl1" yazıyoruz (Yeni Debian sürümü uyumu için)
+# "--fix-missing" ekledik ki internet koparsa tekrar denesin.
+RUN apt-get update --fix-missing && apt-get install -y \
     build-essential \
-    libgl1-mesa-glx \
+    libgl1 \
     libglib2.0-0 \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. KRİTİK ADIM: TORCH VE VISION'I ELLE SABİTLEME
-# requirements.txt'den ÖNCE bunları kuruyoruz ki pip kafasına göre 2.9.1 indirmesin.
+# Pip güncelle
+RUN pip install --upgrade pip
+
+# 3. TORCH SABİTLEME (Aynı mantık, değişmedi)
 RUN pip install torch==2.0.1 torchvision==0.15.2 --index-url https://download.pytorch.org/whl/cu118 --no-cache-dir
 
-# 3. KALAN PAKETLERİ YÜKLEME
-# (requirements.txt içinden torch ve torchvision satırlarını sildiğinden emin ol)
+# 4. Requirements Dosyasını Kopyala ve Kur
 COPY requirements.txt .
+# onnxruntime-gpu yazdığından emin ol
 RUN pip install -r requirements.txt --no-cache-dir
 
-# 4. Uygulama dosyalarını kopyala
+# 5. Dosyaları kopyala
 COPY . .
 
-# (Opsiyonel) Eğer app.py çalıştıracaksan:
+# 6. Başlat
 CMD ["python", "app.py"]
