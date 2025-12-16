@@ -51,16 +51,21 @@ RUN git clone https://github.com/yisol/IDM-VTON.git
 WORKDIR /app/IDM-VTON
 
 # -----------------------------
-# Download checkpoints
+# Download checkpoints (FIXED)
 # -----------------------------
+RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+
 RUN mkdir -p ckpt && \
-    wget https://huggingface.co/yisol/IDM-VTON/resolve/main/ckpt/densepose.zip && \
-    wget https://huggingface.co/yisol/IDM-VTON/resolve/main/ckpt/humanparsing.zip && \
-    wget https://huggingface.co/yisol/IDM-VTON/resolve/main/ckpt/openpose.zip && \
-    unzip densepose.zip -d ckpt && \
-    unzip humanparsing.zip -d ckpt && \
-    unzip openpose.zip -d ckpt && \
-    rm *.zip
+    wget -q --show-progress -O densepose.zip \
+      https://huggingface.co/yisol/IDM-VTON/resolve/main/ckpt/densepose.zip && \
+    wget -q --show-progress -O humanparsing.zip \
+      https://huggingface.co/yisol/IDM-VTON/resolve/main/ckpt/humanparsing.zip && \
+    wget -q --show-progress -O openpose.zip \
+      https://huggingface.co/yisol/IDM-VTON/resolve/main/ckpt/openpose.zip && \
+    unzip -o densepose.zip -d ckpt && \
+    unzip -o humanparsing.zip -d ckpt && \
+    unzip -o openpose.zip -d ckpt && \
+    rm densepose.zip humanparsing.zip openpose.zip
 
 # -----------------------------
 # Fix BROKEN ONNX (CRITICAL)
