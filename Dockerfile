@@ -55,4 +55,4 @@ WORKDIR /app
 RUN git clone https://github.com/yisol/IDM-VTON.git
 
 WORKDIR /app/IDM-VTON
-CMD ["python", "handler.py"]
+CMD ["python", "-u", "handler.py"]
