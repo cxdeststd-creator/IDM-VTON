@@ -41,6 +41,7 @@ from diffusers.models.attention_processor import (
     LoRAXFormersAttnProcessor,
     XFormer
 )
+FusedAttnProcessor2_0 = AttnProcessor2_0
 from diffusers.models.lora import adjust_lora_scale_text_encoder
 from diffusers.schedulers import KarrasDiffusionSchedulers
 from diffusers.utils import (
