@@ -49,17 +49,23 @@ RUN sed -i \
 src/tryon_pipeline.py
 
 # ======================================
-# 7. MODEL WEIGHTS (AUTODOWNLOAD)
+# 7. DOWNLOAD IDM-VTON MODELS (HF SAFE)
 # ======================================
-# ---- CKPT ----
-RUN mkdir -p ckpt && \
-    wget -q https://huggingface.co/yisol/IDM-VTON/resolve/main/ckpt/densepose.zip -O densepose.zip && \
-    wget -q https://huggingface.co/yisol/IDM-VTON/resolve/main/ckpt/humanparsing.zip -O humanparsing.zip && \
-    wget -q https://huggingface.co/yisol/IDM-VTON/resolve/main/ckpt/openpose.zip -O openpose.zip && \
-    unzip densepose.zip -d ckpt && \
-    unzip humanparsing.zip -d ckpt && \
-    unzip openpose.zip -d ckpt && \
-    rm *.zip
+RUN python - << 'EOF'
+from huggingface_hub import snapshot_download
+import os
+
+repo_id = "yisol/IDM-VTON"
+
+snapshot_download(
+    repo_id=repo_id,
+    local_dir=".",
+    local_dir_use_symlinks=False,
+    ignore_patterns=["*.md", "*.png", "*.jpg"]
+)
+
+print("✅ IDM-VTON weights downloaded")
+EOF
 
 # ======================================
 # 8. HANDLER
