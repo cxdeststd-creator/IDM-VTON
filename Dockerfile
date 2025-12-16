@@ -42,29 +42,24 @@ RUN git clone https://github.com/yisol/IDM-VTON.git
 WORKDIR /app/IDM-VTON
 
 # ======================================
-# 6. DIFFUSERS PATCH (ImageProjection)
+# 6. DIFFUSERS PATCH
 # ======================================
 RUN sed -i \
 's/from diffusers.models import AutoencoderKL, ImageProjection, UNet2DConditionModel/from diffusers.models import AutoencoderKL, UNet2DConditionModel; from diffusers.models.embeddings import ImageProjection/' \
 src/tryon_pipeline.py
 
 # ======================================
-# 7. DOWNLOAD IDM-VTON MODELS (HF SAFE)
+# 7. DOWNLOAD MODELS (HF API)
 # ======================================
-RUN python - << 'EOF'
+RUN python - <<EOF
 from huggingface_hub import snapshot_download
-import os
-
-repo_id = "yisol/IDM-VTON"
 
 snapshot_download(
-    repo_id=repo_id,
+    repo_id="yisol/IDM-VTON",
     local_dir=".",
     local_dir_use_symlinks=False,
-    ignore_patterns=["*.md", "*.png", "*.jpg"]
 )
-
-print("✅ IDM-VTON weights downloaded")
+print("OK")
 EOF
 
 # ======================================
