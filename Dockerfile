@@ -1,45 +1,30 @@
-# 1. Base Image
-FROM runpod/pytorch:2.2.0-py3.10-cuda12.1.1-devel-ubuntu22.04
+# Python 3.10 tabanlı hafif imaj (Gereksiz çöplerden arınmış)
+FROM python:3.10-slim
 
+# Çalışma dizinini ayarla
 WORKDIR /app
-ENV DEBIAN_FRONTEND=noninteractive
-ENV PYTHONUNBUFFERED=1
 
-# 2. Sistem Araçları
+# 1. SİSTEM BAĞIMLILIKLARI
+# OpenCV ve Insightface'in çalışması (ve derlenmesi) için bunlar ŞART.
+# Yoksa "libGL.so not found" veya "gcc failed" hatası alırsın.
 RUN apt-get update && apt-get install -y \
-    git wget cmake protobuf-compiler libgl1-mesa-glx libglib2.0-0 build-essential python3-dev \
+    build-essential \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
-# 3. TEMİZLİK: Çakışan Kütüphaneleri Sil (Dependency Conflict Çözümü) 🧹
-RUN pip uninstall -y torch torchvision torchaudio
-
-# 4. KURULUM: Uyumlu Versiyonlar (Torch 2.0.1 + Vision 0.15.2) 🔨
+# 2. KRİTİK ADIM: TORCH VE VISION'I ELLE SABİTLEME
+# requirements.txt'den ÖNCE bunları kuruyoruz ki pip kafasına göre 2.9.1 indirmesin.
 RUN pip install torch==2.0.1 torchvision==0.15.2 --index-url https://download.pytorch.org/whl/cu118 --no-cache-dir
 
-# 5. Requirements Ayarı
+# 3. KALAN PAKETLERİ YÜKLEME
+# (requirements.txt içinden torch ve torchvision satırlarını sildiğinden emin ol)
 COPY requirements.txt .
-# İçindeki torch'u silip kalanı kuruyoruz ki bizim kurduğumuzu bozmasın
-RUN sed -i '/torch/d' requirements.txt && \
-    pip install --upgrade pip && \
-    pip install --no-cache-dir --ignore-installed -r requirements.txt
+RUN pip install -r requirements.txt --no-cache-dir
 
-# RunPod kütüphanesi
-RUN pip install runpod huggingface_hub protobuf
-
-# 6. MODELLERİ İNDİR (Builder Script) ⬇️
-COPY builder.py .
-RUN python3 builder.py
-
-# 7. Kodları Kopyala
+# 4. Uygulama dosyalarını kopyala
 COPY . .
 
-# ==========================================================
-# 8. KRİTİK TAMİR (Bunu yapmazsak Pod AÇILMAZ!) 🛠️
-# ==========================================================
-# Orijinal koddaki hatalı importları temizliyoruz.
-RUN find src -name "*.py" -exec sed -i 's/, PixArtAlphaTextProjection//g' {} + && \
-    find src -name "*.py" -exec sed -i 's/, RMSNorm//g' {} + && \
-    find src -name "*.py" -exec sed -i 's/, AdaLayerNormContinuous//g' {} +
-
-# 9. Başlat
-CMD [ "python", "-u", "handler.py" ]
+# (Opsiyonel) Eğer app.py çalıştıracaksan:
+CMD ["python", "app.py"]
