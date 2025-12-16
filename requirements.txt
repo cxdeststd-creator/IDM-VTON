@@ -1,3 +1,4 @@
+# ================= CORE =================
 torch==2.0.1
 torchvision==0.15.2
 
@@ -11,11 +12,16 @@ numpy<2
 scipy
 einops
 
+# ================= IMAGE / CV =================
 opencv-python
 Pillow
+scikit-image
+matplotlib
+
+# ================= IDM-VTON REQUIRED =================
+onnxruntime-gpu==1.16.3
+
+# ================= UTIL =================
 tqdm
 requests
 runpod
-
-# --- ZORUNLU (Parsing / DensePose) ---
-onnxruntime-gpu==1.16.3
