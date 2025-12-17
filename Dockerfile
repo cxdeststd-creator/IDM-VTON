@@ -1,10 +1,12 @@
+# 1. Base Image (CUDA destekli)
 FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
 
+# 2. Ortam Değişkenleri
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
 
-# 1. Sistem Paketleri
+# 3. Sistem Paketleri (Insightface için build-essential ve python3-dev şart)
 RUN apt-get update && apt-get install -y \
     python3.10 \
     python3-dev \
@@ -12,24 +14,23 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     git \
     curl \
-    unzip \
     ffmpeg \
     libgl1 \
     libglib2.0-0 \
-    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# Python Linkleme
 RUN ln -sf /usr/bin/python3.10 /usr/bin/python
 RUN python -m pip install --upgrade pip setuptools wheel
 
-# 2. TORCH (CUDA 11.8)
+# 4. TORCH (CUDA 11.8 Uyumlu)
 RUN pip install torch==2.1.0+cu118 \
     torchvision==0.16.0+cu118 \
     torchaudio==2.1.0+cu118 \
     --extra-index-url https://download.pytorch.org/whl/cu118 \
     --no-deps
 
-# 3. Temel Kütüphaneler
+# 5. Temel Kütüphaneler (Runpod ve Insightface ekli)
 RUN pip install \
     numpy==1.26.4 \
     pillow==10.2.0 \
@@ -45,9 +46,9 @@ RUN pip install \
     scipy \
     insightface
 
-# 4. Diffusers ve HuggingFace (Versiyonlar Önemli)
+# 6. Diffusers (Senin repon 0.25.0'a göre ayarlandığı için bunu kuruyoruz)
 RUN pip install \
-    diffusers==0.24.0 \
+    diffusers==0.25.0 \
     transformers==4.36.2 \
     accelerate==0.25.0 \
     huggingface-hub==0.19.4 \
@@ -56,27 +57,18 @@ RUN pip install \
     xformers==0.0.22.post7 \
     --no-deps
 
-# 5. Kodu İndirme
+# 7. SENİN GITHUB REPONU ÇEKİYORUZ
 WORKDIR /app
-RUN git clone https://github.com/yisol/IDM-VTON.git
 
+# Yisol yerine senin reponu yazıyoruz:
+RUN git clone https://github.com/cxdeststd-creator/IDM-VTON.git
+
+# Repo içine giriyoruz
 WORKDIR /app/IDM-VTON
 
-# ==========================================================
-# 🛑 KOD AMELİYATI (SED KOMUTLARI) - BURASI HATALARI ÇÖZER
-# ==========================================================
-
-# Düzeltme 1: ImageProjection Hatası
-# "diffusers.models" içinden ImageProjection kalktı, onu "models.embeddings" içine yönlendiriyoruz.
-RUN sed -i 's/from diffusers.models import AutoencoderKL, ImageProjection, UNet2DConditionModel/from diffusers.models import AutoencoderKL, UNet2DConditionModel; from diffusers.models.embeddings import ImageProjection/g' src/tryon_pipeline.py
-
-# Düzeltme 2: FusedAttnProcessor2_0 Hatası (Sırada bekleyen hata buydu, peşinen çözdük)
-# Bu isim değişti, eski ismi yeni isme (AttnProcessor2_0) eşitliyoruz.
-RUN sed -i 's/from diffusers.models.attention_processor import FusedAttnProcessor2_0/from diffusers.models.attention_processor import AttnProcessor2_0 as FusedAttnProcessor2_0/g' src/tryon_pipeline.py
-
-# ==========================================================
-
-# 6. Handler Dosyasını İçeri Atma
+# NOT: handler.py dosyasını GitHub repona yüklediysen alttaki COPY komutuna gerek yok.
+# Ama eğer yüklemediysen veya emin değilsen bu satır kalsın, zarar gelmez.
 COPY handler.py .
 
+# 8. Başlatma
 CMD ["python", "-u", "handler.py"]
