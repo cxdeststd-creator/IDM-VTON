@@ -24,40 +24,46 @@ import os
 import shutil
 from huggingface_hub import hf_hub_download
 
+import os
+import shutil
+from huggingface_hub import hf_hub_download
+
 # -------------------------------------------------
-# CKPT DOWNLOAD (RUNTIME) - DOĞRU KONUMLAR
+# CKPT DOWNLOAD (RUNTIME) - FİNAL DOĞRU YOLLAR
 # -------------------------------------------------
 def ensure_ckpts():
-    print("⬇️ Model dosyaları kontrol ediliyor...")
+    print("⬇️ Model dosyaları indiriliyor ve kontrol ediliyor...")
     
     REPO_ID = "yisol/IDM-VTON"
     
-    # [HuggingFace'teki Yol] -> [Bilgisayara İneceği Yol]
+    # [HuggingFace Yolu] -> [Senin Kodunun Baktığı Yer (Hedef)]
     download_map = {
-        # --- OPENPOSE (Burası kritik, preprocess içine inmesi lazım) ---
-        "openpose/ckpts/body_pose_model.pth": "preprocess/openpose/ckpts/body_pose_model.pth",
+        # --- 1. OPENPOSE (Senin dediğin: ckpt/openpose/ckpts/) ---
+        "openpose/ckpts/body_pose_model.pth": "ckpt/openpose/ckpts/body_pose_model.pth",
 
-        # --- DensePose & HumanParsing (Bunlar ckpt klasöründe çalışıyor) ---
+        # --- 2. DENSEPOSE & HUMANPARSING (Bunlar ckpt/ altında) ---
         "densepose/model_final_162be9.pkl": "ckpt/densepose/densepose_model.pkl",
         "humanparsing/parsing_atr.onnx": "ckpt/humanparsing/parsing_atr.onnx",
         "humanparsing/parsing_lip.onnx": "ckpt/humanparsing/parsing_lip.onnx",
 
-        # --- Image Encoder & IP Adapter (Bunlar da ckpt içinde) ---
-        "image_encoder/config.json": "ckpt/image_encoder/config.json",
-        "image_encoder/pytorch_model.bin": "ckpt/image_encoder/pytorch_model.bin",
-        "ip_adapter/adapter_model.bin": "ckpt/ip_adapter/adapter_model.bin" 
+        # --- 3. IMAGE ENCODER & IP ADAPTER (Bunlar ANA DİZİNDE olmalı) ---
+        # Eğer kodun bunları da ckpt içinde arıyorsa yolları "ckpt/..." diye değiştir.
+        # Ama genelde orijinal kod ana dizine bakar.
+        "image_encoder/config.json": "image_encoder/config.json",
+        "image_encoder/pytorch_model.bin": "image_encoder/pytorch_model.bin",
+        "ip_adapter/adapter_model.bin": "ip_adapter/adapter_model.bin"
     }
 
     for remote_path, local_path in download_map.items():
         
-        # --- SAHTE DOSYA TEMİZLİĞİ ---
+        # --- SAHTE DOSYA TEMİZLİĞİ (LFS Pointer Check) ---
         if os.path.exists(local_path):
             try:
                 file_size_kb = os.path.getsize(local_path) / 1024
             except OSError:
                 file_size_kb = 0
 
-            # Dosya 100KB'dan küçükse kesin sahte/bozuktur.
+            # Dosya 100KB'dan küçükse sahtedir, sil.
             if file_size_kb < 100: 
                 print(f"⚠️ SAHTE DOSYA: {local_path} ({file_size_kb:.2f} KB) -> Siliniyor...")
                 try:
@@ -66,11 +72,11 @@ def ensure_ckpts():
                     pass
             else:
                 continue
-        # -----------------------------
+        # -------------------------------------------------
 
         print(f"⏳ İndiriliyor: {remote_path} -> {local_path}")
         
-        # Klasör yoksa oluştur
+        # Hedef klasör oluşturuluyor (ckpt/openpose/ckpts/ gibi iç içe olsa bile)
         os.makedirs(os.path.dirname(local_path), exist_ok=True)
         
         try:
