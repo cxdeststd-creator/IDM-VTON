@@ -29,76 +29,80 @@ import shutil
 from huggingface_hub import hf_hub_download
 
 # -------------------------------------------------
-# CKPT DOWNLOAD (RUNTIME) - ZORLA ÜZERİNE YAZMA MODU
+# CKPT DOWNLOAD (RUNTIME) - SAFETENSORS DESTEKLİ
 # -------------------------------------------------
 def ensure_ckpts():
-    print("⬇️ Model dosyaları indiriliyor (Zorla Üzerine Yazılıyor)...")
+    print("⬇️ Model dosyaları indiriliyor (Safetensors Güncellendi)...")
     
-    REPO_ID = "yisol/IDM-VTON"
-    
-    # OpenPose için yine iki yere birden atıyoruz, garanti olsun.
     tasks = [
-        # --- OPENPOSE ---
+        # --- 1. IMAGE ENCODER (CLIP) - Laion Reposundan ---
+        # Düzeltme: pytorch_model.bin yerine model.safetensors çekiyoruz.
         {
+            "repo_id": "laion/CLIP-ViT-H-14-laion2B-s32B-b79K",
+            "remote": "config.json",
+            "locals": ["image_encoder/config.json"]
+        },
+        {
+            "repo_id": "laion/CLIP-ViT-H-14-laion2B-s32B-b79K",
+            "remote": "model.safetensors",  # <-- KULLANICININ DÜZELTTİĞİ KISIM
+            "locals": ["image_encoder/model.safetensors"]
+        },
+
+        # --- 2. OPENPOSE (Yisol Reposundan - Çift Dikiş) ---
+        {
+            "repo_id": "yisol/IDM-VTON",
             "remote": "openpose/ckpts/body_pose_model.pth",
             "locals": [
-                "ckpt/openpose/ckpts/body_pose_model.pth",       # Senin dediğin yer
-                "preprocess/openpose/ckpts/body_pose_model.pth"  # Kodun orijinal yeri
+                "ckpt/openpose/ckpts/body_pose_model.pth",
+                "preprocess/openpose/ckpts/body_pose_model.pth"
             ]
         },
         
-        # --- DENSEPOSE & HUMANPARSING ---
+        # --- 3. DENSEPOSE & HUMANPARSING (Yisol Reposundan) ---
         {
+            "repo_id": "yisol/IDM-VTON",
             "remote": "densepose/model_final_162be9.pkl",
             "locals": ["ckpt/densepose/densepose_model.pkl"]
         },
         {
+            "repo_id": "yisol/IDM-VTON",
             "remote": "humanparsing/parsing_atr.onnx",
             "locals": ["ckpt/humanparsing/parsing_atr.onnx"]
         },
         {
+            "repo_id": "yisol/IDM-VTON",
             "remote": "humanparsing/parsing_lip.onnx",
             "locals": ["ckpt/humanparsing/parsing_lip.onnx"]
         },
 
-        # --- IMAGE ENCODER & ADAPTER (Ana Dizin) ---
+        # --- 4. IP ADAPTER (Yisol Reposundan) ---
         {
-            "remote": "image_encoder/config.json",
-            "locals": ["image_encoder/config.json"]
-        },
-        {
-            "remote": "image_encoder/pytorch_model.bin",
-            "locals": ["image_encoder/pytorch_model.bin"]
-        },
-        {
+            "repo_id": "yisol/IDM-VTON",
             "remote": "ip_adapter/adapter_model.bin",
             "locals": ["ip_adapter/adapter_model.bin"]
         }
     ]
 
     for task in tasks:
+        repo_id = task["repo_id"]
         remote_path = task["remote"]
         local_paths = task["locals"]
 
-        # 1. Dosyayı Hugging Face'ten çek (Cache varsa hızlı gelir)
         try:
-            print(f"⏳ İndiriliyor: {remote_path}")
+            print(f"⏳ İndiriliyor ({repo_id}): {remote_path}")
             downloaded_file_path = hf_hub_download(
-                repo_id=REPO_ID,
+                repo_id=repo_id,
                 filename=remote_path
             )
         except Exception as e:
-            print(f"❌ HATA: {remote_path} indirilemedi! Detay: {e}")
+            print(f"❌ HATA: {remote_path} ({repo_id}) indirilemedi! Detay: {e}")
             raise e
 
-        # 2. Hiç soru sormadan hedeflere kopyala (Varsa ezer geçer)
+        # İndirilen dosyayı hedeflere kopyala (Zorla yazma)
         for local_path in local_paths:
-            # Hedef klasörü oluştur
             os.makedirs(os.path.dirname(local_path), exist_ok=True)
-            
-            # Kopyala / Üzerine Yaz
             shutil.copy(downloaded_file_path, local_path)
-            print(f"✅ Yazıldı: {local_path}")
+            print(f"✅ Yerleştirildi: {local_path}")
 
 # -------------------------------------------------
 # MODEL LOAD
