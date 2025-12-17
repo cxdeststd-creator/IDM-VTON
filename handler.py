@@ -25,37 +25,48 @@ import shutil
 from huggingface_hub import hf_hub_download
 
 # -------------------------------------------------
-# CKPT DOWNLOAD (RUNTIME) - SAHTE DOSYA SİLİCİ
+# CKPT DOWNLOAD (RUNTIME) - DOĞRU KONUMLAR
 # -------------------------------------------------
 def ensure_ckpts():
-    print("⬇️ Model dosyaları ve boyutları kontrol ediliyor...")
+    print("⬇️ Model dosyaları kontrol ediliyor...")
     
-    # Gerçek modellerin olduğu repo (Yisol)
     REPO_ID = "yisol/IDM-VTON"
     
+    # [HuggingFace'teki Yol] -> [Bilgisayara İneceği Yol]
     download_map = {
+        # --- OPENPOSE (Burası kritik, preprocess içine inmesi lazım) ---
+        "openpose/ckpts/body_pose_model.pth": "preprocess/openpose/ckpts/body_pose_model.pth",
+
+        # --- DensePose & HumanParsing (Bunlar ckpt klasöründe çalışıyor) ---
         "densepose/model_final_162be9.pkl": "ckpt/densepose/densepose_model.pkl",
         "humanparsing/parsing_atr.onnx": "ckpt/humanparsing/parsing_atr.onnx",
         "humanparsing/parsing_lip.onnx": "ckpt/humanparsing/parsing_lip.onnx",
-        "openpose/ckpts/body_pose_model.pth": "ckpt/openpose/body_pose_model.pth"
+
+        # --- Image Encoder & IP Adapter (Bunlar da ckpt içinde) ---
+        "image_encoder/config.json": "ckpt/image_encoder/config.json",
+        "image_encoder/pytorch_model.bin": "ckpt/image_encoder/pytorch_model.bin",
+        "ip_adapter/adapter_model.bin": "ckpt/ip_adapter/adapter_model.bin" 
     }
 
     for remote_path, local_path in download_map.items():
         
-        # --- KRİTİK NOKTA BURASI ---
+        # --- SAHTE DOSYA TEMİZLİĞİ ---
         if os.path.exists(local_path):
-            # Dosya var gözüküyor ama boyutu ne?
-            file_size_kb = os.path.getsize(local_path) / 1024
-            
-            # Eğer dosya 100KB'dan küçükse, bu kesinlikle o "put here" yazısıdır veya pointerdır.
+            try:
+                file_size_kb = os.path.getsize(local_path) / 1024
+            except OSError:
+                file_size_kb = 0
+
+            # Dosya 100KB'dan küçükse kesin sahte/bozuktur.
             if file_size_kb < 100: 
-                print(f"⚠️ SAHTE DOSYA TESPİT EDİLDİ: {local_path} ({file_size_kb:.2f} KB)")
-                print("🗑️ Siliniyor ve orijinali indiriliyor...")
-                os.remove(local_path) # Sahte dosyayı siliyoruz
+                print(f"⚠️ SAHTE DOSYA: {local_path} ({file_size_kb:.2f} KB) -> Siliniyor...")
+                try:
+                    os.remove(local_path)
+                except OSError:
+                    pass
             else:
-                # Dosya büyükse gerçektir, devam et.
                 continue
-        # ---------------------------
+        # -----------------------------
 
         print(f"⏳ İndiriliyor: {remote_path} -> {local_path}")
         
