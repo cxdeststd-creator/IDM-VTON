@@ -29,67 +29,76 @@ import shutil
 from huggingface_hub import hf_hub_download
 
 # -------------------------------------------------
-# CKPT DOWNLOAD (RUNTIME) - FİNAL DOĞRU YOLLAR
+# CKPT DOWNLOAD (RUNTIME) - ZORLA ÜZERİNE YAZMA MODU
 # -------------------------------------------------
 def ensure_ckpts():
-    print("⬇️ Model dosyaları indiriliyor ve kontrol ediliyor...")
+    print("⬇️ Model dosyaları indiriliyor (Zorla Üzerine Yazılıyor)...")
     
     REPO_ID = "yisol/IDM-VTON"
     
-    # [HuggingFace Yolu] -> [Senin Kodunun Baktığı Yer (Hedef)]
-    download_map = {
-        # --- 1. OPENPOSE (Senin dediğin: ckpt/openpose/ckpts/) ---
-        "openpose/ckpts/body_pose_model.pth": "ckpt/openpose/ckpts/body_pose_model.pth",
-
-        # --- 2. DENSEPOSE & HUMANPARSING (Bunlar ckpt/ altında) ---
-        "densepose/model_final_162be9.pkl": "ckpt/densepose/densepose_model.pkl",
-        "humanparsing/parsing_atr.onnx": "ckpt/humanparsing/parsing_atr.onnx",
-        "humanparsing/parsing_lip.onnx": "ckpt/humanparsing/parsing_lip.onnx",
-
-        # --- 3. IMAGE ENCODER & IP ADAPTER (Bunlar ANA DİZİNDE olmalı) ---
-        # Eğer kodun bunları da ckpt içinde arıyorsa yolları "ckpt/..." diye değiştir.
-        # Ama genelde orijinal kod ana dizine bakar.
-        "image_encoder/config.json": "image_encoder/config.json",
-        "image_encoder/pytorch_model.bin": "image_encoder/pytorch_model.bin",
-        "ip_adapter/adapter_model.bin": "ip_adapter/adapter_model.bin"
-    }
-
-    for remote_path, local_path in download_map.items():
+    # OpenPose için yine iki yere birden atıyoruz, garanti olsun.
+    tasks = [
+        # --- OPENPOSE ---
+        {
+            "remote": "openpose/ckpts/body_pose_model.pth",
+            "locals": [
+                "ckpt/openpose/ckpts/body_pose_model.pth",       # Senin dediğin yer
+                "preprocess/openpose/ckpts/body_pose_model.pth"  # Kodun orijinal yeri
+            ]
+        },
         
-        # --- SAHTE DOSYA TEMİZLİĞİ (LFS Pointer Check) ---
-        if os.path.exists(local_path):
-            try:
-                file_size_kb = os.path.getsize(local_path) / 1024
-            except OSError:
-                file_size_kb = 0
+        # --- DENSEPOSE & HUMANPARSING ---
+        {
+            "remote": "densepose/model_final_162be9.pkl",
+            "locals": ["ckpt/densepose/densepose_model.pkl"]
+        },
+        {
+            "remote": "humanparsing/parsing_atr.onnx",
+            "locals": ["ckpt/humanparsing/parsing_atr.onnx"]
+        },
+        {
+            "remote": "humanparsing/parsing_lip.onnx",
+            "locals": ["ckpt/humanparsing/parsing_lip.onnx"]
+        },
 
-            # Dosya 100KB'dan küçükse sahtedir, sil.
-            if file_size_kb < 100: 
-                print(f"⚠️ SAHTE DOSYA: {local_path} ({file_size_kb:.2f} KB) -> Siliniyor...")
-                try:
-                    os.remove(local_path)
-                except OSError:
-                    pass
-            else:
-                continue
-        # -------------------------------------------------
+        # --- IMAGE ENCODER & ADAPTER (Ana Dizin) ---
+        {
+            "remote": "image_encoder/config.json",
+            "locals": ["image_encoder/config.json"]
+        },
+        {
+            "remote": "image_encoder/pytorch_model.bin",
+            "locals": ["image_encoder/pytorch_model.bin"]
+        },
+        {
+            "remote": "ip_adapter/adapter_model.bin",
+            "locals": ["ip_adapter/adapter_model.bin"]
+        }
+    ]
 
-        print(f"⏳ İndiriliyor: {remote_path} -> {local_path}")
-        
-        # Hedef klasör oluşturuluyor (ckpt/openpose/ckpts/ gibi iç içe olsa bile)
-        os.makedirs(os.path.dirname(local_path), exist_ok=True)
-        
+    for task in tasks:
+        remote_path = task["remote"]
+        local_paths = task["locals"]
+
+        # 1. Dosyayı Hugging Face'ten çek (Cache varsa hızlı gelir)
         try:
+            print(f"⏳ İndiriliyor: {remote_path}")
             downloaded_file_path = hf_hub_download(
                 repo_id=REPO_ID,
                 filename=remote_path
             )
-            shutil.copy(downloaded_file_path, local_path)
-            print(f"✅ İndirildi: {local_path}")
-            
         except Exception as e:
             print(f"❌ HATA: {remote_path} indirilemedi! Detay: {e}")
             raise e
+
+        # 2. Hiç soru sormadan hedeflere kopyala (Varsa ezer geçer)
+        for local_path in local_paths:
+            # Hedef klasörü oluştur
+            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+            
+            # Kopyala / Üzerine Yaz
+            shutil.copy(downloaded_file_path, local_path)
+            print(f"✅ Yazıldı: {local_path}")
 
 # -------------------------------------------------
 # MODEL LOAD
