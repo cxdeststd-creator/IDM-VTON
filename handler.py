@@ -20,12 +20,17 @@ import os
 import shutil
 from huggingface_hub import hf_hub_download
 
+import os
+import shutil
+from huggingface_hub import hf_hub_download
+
 # -------------------------------------------------
-# CKPT DOWNLOAD (RUNTIME) - AKILLI KONTROL
+# CKPT DOWNLOAD (RUNTIME) - SAHTE DOSYA SİLİCİ
 # -------------------------------------------------
 def ensure_ckpts():
-    print("⬇️ Model dosyaları kontrol ediliyor...")
+    print("⬇️ Model dosyaları ve boyutları kontrol ediliyor...")
     
+    # Gerçek modellerin olduğu repo (Yisol)
     REPO_ID = "yisol/IDM-VTON"
     
     download_map = {
@@ -37,19 +42,24 @@ def ensure_ckpts():
 
     for remote_path, local_path in download_map.items():
         
-        # --- YENİ EKLENEN KISIM: SAHTE DOSYA KONTROLÜ ---
+        # --- KRİTİK NOKTA BURASI ---
         if os.path.exists(local_path):
-            # Dosya boyutu 100KB'dan küçükse bu muhtemelen LFS pointerdır (Çöp dosya)
-            if os.path.getsize(local_path) < 100 * 1024: 
-                print(f"⚠️ {local_path} boyutu çok küçük, muhtemelen LFS Pointer. Siliniyor ve yeniden indiriliyor...")
-                os.remove(local_path)
+            # Dosya var gözüküyor ama boyutu ne?
+            file_size_kb = os.path.getsize(local_path) / 1024
+            
+            # Eğer dosya 100KB'dan küçükse, bu kesinlikle o "put here" yazısıdır veya pointerdır.
+            if file_size_kb < 100: 
+                print(f"⚠️ SAHTE DOSYA TESPİT EDİLDİ: {local_path} ({file_size_kb:.2f} KB)")
+                print("🗑️ Siliniyor ve orijinali indiriliyor...")
+                os.remove(local_path) # Sahte dosyayı siliyoruz
             else:
-                # Dosya var ve boyutu makul, geç
+                # Dosya büyükse gerçektir, devam et.
                 continue
-        # ------------------------------------------------
+        # ---------------------------
 
         print(f"⏳ İndiriliyor: {remote_path} -> {local_path}")
         
+        # Klasör yoksa oluştur
         os.makedirs(os.path.dirname(local_path), exist_ok=True)
         
         try:
@@ -58,7 +68,7 @@ def ensure_ckpts():
                 filename=remote_path
             )
             shutil.copy(downloaded_file_path, local_path)
-            print(f"✅ Tamamlandı: {local_path}")
+            print(f"✅ İndirildi: {local_path}")
             
         except Exception as e:
             print(f"❌ HATA: {remote_path} indirilemedi! Detay: {e}")
