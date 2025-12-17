@@ -12,34 +12,60 @@ model = {}
 
 BASE_REPO = "yisol/IDM-VTON"
 
+import os
+import shutil
+from huggingface_hub import hf_hub_download
+
+import os
+import shutil
+from huggingface_hub import hf_hub_download
+
 # -------------------------------------------------
-# CKPT DOWNLOAD (RUNTIME)
+# CKPT DOWNLOAD (RUNTIME) - FİNAL HARİTA
 # -------------------------------------------------
 def ensure_ckpts():
-    # BURASI ÖNEMLİ:
-    # Orijinal repoda dosya isimleri hatalı (model_final_... vs).
-    # O yüzden isimlerin düzeltilmiş olduğu bu repoyu kullanıyoruz.
-    AUX_REPO = "camenduru/IDM-VTON"
+    print("⬇️ Model dosyaları Yisol reposundan çekiliyor...")
     
-    ckpt_files = [
-        "ckpt/densepose/densepose_model.pkl",
-        "ckpt/humanparsing/parsing_atr.onnx",
-        "ckpt/openpose/body_pose_model.pth"
-    ]
+    REPO_ID = "yisol/IDM-VTON"
+    
+    # [HuggingFace Yolu]  ->  [Senin Kodunun İstediği Yol]
+    download_map = {
+        # Densepose (İsim değişikliği yapılıyor)
+        "densepose/model_final_162be9.pkl": "ckpt/densepose/densepose_model.pkl",
+        
+        # Humanparsing (İki dosyayı da alalım garanti olsun)
+        "humanparsing/parsing_atr.onnx": "ckpt/humanparsing/parsing_atr.onnx",
+        "humanparsing/parsing_lip.onnx": "ckpt/humanparsing/parsing_lip.onnx",
+        
+        # Openpose (Senin dediğin klasör yolundan çekiyoruz)
+        "openpose/ckpts/body_pose_model.pth": "ckpt/openpose/body_pose_model.pth"
+    }
 
-    for file in ckpt_files:
-        if not os.path.exists(file):
-            print(f"⬇️ Downloading {file} from {AUX_REPO}...")
-            try:
-                hf_hub_download(
-                    repo_id=AUX_REPO,
-                    filename=file,
-                    local_dir=".",
-                    local_dir_use_symlinks=False
-                )
-            except Exception as e:
-                print(f"⚠️ Hata: {file} indirilemedi! Detay: {e}")
-                raise e
+    for remote_path, local_path in download_map.items():
+        # Dosya zaten var mı?
+        if os.path.exists(local_path):
+            continue
+
+        print(f"⏳ İndiriliyor: {remote_path} -> {local_path}")
+        
+        # 1. Hedef klasörü oluştur
+        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+        
+        try:
+            # 2. Dosyayı Hugging Face'ten indir
+            downloaded_file_path = hf_hub_download(
+                repo_id=REPO_ID,
+                filename=remote_path
+            )
+            
+            # 3. İndirilen dosyayı doğru isme ve yere kopyala
+            shutil.copy(downloaded_file_path, local_path)
+            print(f"✅ Tamamlandı: {local_path}")
+            
+        except Exception as e:
+            print(f"❌ HATA: {remote_path} indirilemedi! Detay: {e}")
+            # Bu dosya hayati, indiremezse devam etme
+            raise e
 
 # -------------------------------------------------
 # MODEL LOAD
