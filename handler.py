@@ -29,14 +29,22 @@ import shutil
 from huggingface_hub import hf_hub_download
 
 # -------------------------------------------------
-# CKPT DOWNLOAD (RUNTIME) - SAFETENSORS DESTEKLİ
+# CKPT DOWNLOAD (RUNTIME) - FİNAL ÇÖZÜM
 # -------------------------------------------------
 def ensure_ckpts():
-    print("⬇️ Model dosyaları indiriliyor (Safetensors Güncellendi)...")
+    print("⬇️ Model dosyaları gerçek kaynaklarından indiriliyor...")
     
     tasks = [
-        # --- 1. IMAGE ENCODER (CLIP) - Laion Reposundan ---
-        # Düzeltme: pytorch_model.bin yerine model.safetensors çekiyoruz.
+        # --- 1. IP ADAPTER (Kaynak: h94/IP-Adapter) ---
+        # Yisol'da yok, h94 reposundan çekip ismini 'adapter_model.bin' yapıyoruz.
+        {
+            "repo_id": "h94/IP-Adapter",
+            "remote": "sdxl_models/ip-adapter-plus_sdxl_vit-h.bin",
+            "locals": ["ip_adapter/adapter_model.bin"] # Kodun istediği isme çeviriyoruz
+        },
+
+        # --- 2. IMAGE ENCODER (Kaynak: laion/CLIP) ---
+        # Yisol'da yok, orijinal Laion reposundan çekiyoruz.
         {
             "repo_id": "laion/CLIP-ViT-H-14-laion2B-s32B-b79K",
             "remote": "config.json",
@@ -44,11 +52,11 @@ def ensure_ckpts():
         },
         {
             "repo_id": "laion/CLIP-ViT-H-14-laion2B-s32B-b79K",
-            "remote": "model.safetensors",  # <-- KULLANICININ DÜZELTTİĞİ KISIM
+            "remote": "model.safetensors", 
             "locals": ["image_encoder/model.safetensors"]
         },
 
-        # --- 2. OPENPOSE (Yisol Reposundan - Çift Dikiş) ---
+        # --- 3. OPENPOSE (Kaynak: Yisol) ---
         {
             "repo_id": "yisol/IDM-VTON",
             "remote": "openpose/ckpts/body_pose_model.pth",
@@ -58,7 +66,7 @@ def ensure_ckpts():
             ]
         },
         
-        # --- 3. DENSEPOSE & HUMANPARSING (Yisol Reposundan) ---
+        # --- 4. DENSEPOSE & HUMANPARSING (Kaynak: Yisol) ---
         {
             "repo_id": "yisol/IDM-VTON",
             "remote": "densepose/model_final_162be9.pkl",
@@ -73,13 +81,6 @@ def ensure_ckpts():
             "repo_id": "yisol/IDM-VTON",
             "remote": "humanparsing/parsing_lip.onnx",
             "locals": ["ckpt/humanparsing/parsing_lip.onnx"]
-        },
-
-        # --- 4. IP ADAPTER (Yisol Reposundan) ---
-        {
-            "repo_id": "yisol/IDM-VTON",
-            "remote": "ip_adapter/adapter_model.bin",
-            "locals": ["ip_adapter/adapter_model.bin"]
         }
     ]
 
@@ -98,7 +99,7 @@ def ensure_ckpts():
             print(f"❌ HATA: {remote_path} ({repo_id}) indirilemedi! Detay: {e}")
             raise e
 
-        # İndirilen dosyayı hedeflere kopyala (Zorla yazma)
+        # İndirilen dosyayı hedeflere kopyala
         for local_path in local_paths:
             os.makedirs(os.path.dirname(local_path), exist_ok=True)
             shutil.copy(downloaded_file_path, local_path)
