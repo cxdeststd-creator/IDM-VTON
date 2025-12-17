@@ -4,7 +4,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
 
-# 1. build-essential ve python3-dev EKLENDİ (Insightface derlemek için şart)
+# 1. Sistem Paketleri
 RUN apt-get update && apt-get install -y \
     python3.10 \
     python3-dev \
@@ -22,15 +22,14 @@ RUN apt-get update && apt-get install -y \
 RUN ln -sf /usr/bin/python3.10 /usr/bin/python
 RUN python -m pip install --upgrade pip setuptools wheel
 
-# ---- TORCH (NO-DEPS) ----
+# 2. TORCH (CUDA 11.8)
 RUN pip install torch==2.1.0+cu118 \
     torchvision==0.16.0+cu118 \
     torchaudio==2.1.0+cu118 \
     --extra-index-url https://download.pytorch.org/whl/cu118 \
     --no-deps
 
-# ---- CORE DEPS ----
-# runpod, insightface ve scipy EKLENDİ
+# 3. Temel Kütüphaneler
 RUN pip install \
     numpy==1.26.4 \
     pillow==10.2.0 \
@@ -46,8 +45,7 @@ RUN pip install \
     scipy \
     insightface
 
-# ---- HF STACK (NO-DEPS) ----
-# diffusers versiyonunu 0.24.0'a çektim çünkü IDM-VTON kodu yenisiyle çalışmaz
+# 4. Diffusers ve HuggingFace (Versiyonlar Önemli)
 RUN pip install \
     diffusers==0.24.0 \
     transformers==4.36.2 \
@@ -58,14 +56,27 @@ RUN pip install \
     xformers==0.0.22.post7 \
     --no-deps
 
-# ---- IDM-VTON CODE ----
+# 5. Kodu İndirme
 WORKDIR /app
 RUN git clone https://github.com/yisol/IDM-VTON.git
 
 WORKDIR /app/IDM-VTON
 
-# !!! İŞTE UNUTTUĞUN SATIR BU !!!
-# Bilgisayarındaki handler.py dosyasını konteynerin içine atıyoruz
+# ==========================================================
+# 🛑 KOD AMELİYATI (SED KOMUTLARI) - BURASI HATALARI ÇÖZER
+# ==========================================================
+
+# Düzeltme 1: ImageProjection Hatası
+# "diffusers.models" içinden ImageProjection kalktı, onu "models.embeddings" içine yönlendiriyoruz.
+RUN sed -i 's/from diffusers.models import AutoencoderKL, ImageProjection, UNet2DConditionModel/from diffusers.models import AutoencoderKL, UNet2DConditionModel; from diffusers.models.embeddings import ImageProjection/g' src/tryon_pipeline.py
+
+# Düzeltme 2: FusedAttnProcessor2_0 Hatası (Sırada bekleyen hata buydu, peşinen çözdük)
+# Bu isim değişti, eski ismi yeni isme (AttnProcessor2_0) eşitliyoruz.
+RUN sed -i 's/from diffusers.models.attention_processor import FusedAttnProcessor2_0/from diffusers.models.attention_processor import AttnProcessor2_0 as FusedAttnProcessor2_0/g' src/tryon_pipeline.py
+
+# ==========================================================
+
+# 6. Handler Dosyasını İçeri Atma
 COPY handler.py .
 
 CMD ["python", "-u", "handler.py"]
