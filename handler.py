@@ -16,6 +16,11 @@ BASE_REPO = "yisol/IDM-VTON"
 # CKPT DOWNLOAD (RUNTIME)
 # -------------------------------------------------
 def ensure_ckpts():
+    # BURASI ÖNEMLİ:
+    # Orijinal repoda dosya isimleri hatalı (model_final_... vs).
+    # O yüzden isimlerin düzeltilmiş olduğu bu repoyu kullanıyoruz.
+    AUX_REPO = "camenduru/IDM-VTON"
+    
     ckpt_files = [
         "ckpt/densepose/densepose_model.pkl",
         "ckpt/humanparsing/parsing_atr.onnx",
@@ -24,13 +29,17 @@ def ensure_ckpts():
 
     for file in ckpt_files:
         if not os.path.exists(file):
-            print(f"⬇️ Downloading {file}")
-            hf_hub_download(
-                repo_id=BASE_REPO,
-                filename=file,
-                local_dir=".",          # 🔴 KRİTİK
-                local_dir_use_symlinks=False
-            )
+            print(f"⬇️ Downloading {file} from {AUX_REPO}...")
+            try:
+                hf_hub_download(
+                    repo_id=AUX_REPO,
+                    filename=file,
+                    local_dir=".",
+                    local_dir_use_symlinks=False
+                )
+            except Exception as e:
+                print(f"⚠️ Hata: {file} indirilemedi! Detay: {e}")
+                raise e
 
 # -------------------------------------------------
 # MODEL LOAD
