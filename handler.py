@@ -21,50 +21,47 @@ import shutil
 from huggingface_hub import hf_hub_download
 
 # -------------------------------------------------
-# CKPT DOWNLOAD (RUNTIME) - FİNAL HARİTA
+# CKPT DOWNLOAD (RUNTIME) - AKILLI KONTROL
 # -------------------------------------------------
 def ensure_ckpts():
-    print("⬇️ Model dosyaları Yisol reposundan çekiliyor...")
+    print("⬇️ Model dosyaları kontrol ediliyor...")
     
     REPO_ID = "yisol/IDM-VTON"
     
-    # [HuggingFace Yolu]  ->  [Senin Kodunun İstediği Yol]
     download_map = {
-        # Densepose (İsim değişikliği yapılıyor)
         "densepose/model_final_162be9.pkl": "ckpt/densepose/densepose_model.pkl",
-        
-        # Humanparsing (İki dosyayı da alalım garanti olsun)
         "humanparsing/parsing_atr.onnx": "ckpt/humanparsing/parsing_atr.onnx",
         "humanparsing/parsing_lip.onnx": "ckpt/humanparsing/parsing_lip.onnx",
-        
-        # Openpose (Senin dediğin klasör yolundan çekiyoruz)
         "openpose/ckpts/body_pose_model.pth": "ckpt/openpose/body_pose_model.pth"
     }
 
     for remote_path, local_path in download_map.items():
-        # Dosya zaten var mı?
+        
+        # --- YENİ EKLENEN KISIM: SAHTE DOSYA KONTROLÜ ---
         if os.path.exists(local_path):
-            continue
+            # Dosya boyutu 100KB'dan küçükse bu muhtemelen LFS pointerdır (Çöp dosya)
+            if os.path.getsize(local_path) < 100 * 1024: 
+                print(f"⚠️ {local_path} boyutu çok küçük, muhtemelen LFS Pointer. Siliniyor ve yeniden indiriliyor...")
+                os.remove(local_path)
+            else:
+                # Dosya var ve boyutu makul, geç
+                continue
+        # ------------------------------------------------
 
         print(f"⏳ İndiriliyor: {remote_path} -> {local_path}")
         
-        # 1. Hedef klasörü oluştur
         os.makedirs(os.path.dirname(local_path), exist_ok=True)
         
         try:
-            # 2. Dosyayı Hugging Face'ten indir
             downloaded_file_path = hf_hub_download(
                 repo_id=REPO_ID,
                 filename=remote_path
             )
-            
-            # 3. İndirilen dosyayı doğru isme ve yere kopyala
             shutil.copy(downloaded_file_path, local_path)
             print(f"✅ Tamamlandı: {local_path}")
             
         except Exception as e:
             print(f"❌ HATA: {remote_path} indirilemedi! Detay: {e}")
-            # Bu dosya hayati, indiremezse devam etme
             raise e
 
 # -------------------------------------------------
