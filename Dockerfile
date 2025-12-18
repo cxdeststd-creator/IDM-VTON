@@ -47,7 +47,7 @@ RUN pip install \
     scipy \
     insightface
 
-# 6. Diffusers ve HuggingFace
+# 6. Diffusers (Senin repon 0.25.0'a göre ayarlandığı için bunu kuruyoruz)
 RUN pip install \
     diffusers==0.25.0 \
     transformers==4.36.2 \
@@ -65,16 +65,16 @@ RUN git clone https://github.com/cxdeststd-creator/IDM-VTON.git
 # Repo içine giriyoruz
 WORKDIR /app/IDM-VTON
 
-# ⚠️ ÖNEMLİ ADIM:
-# Bilgisayarındaki son düzenlediğin (ensure_ckpts fonksiyonlu) handler.py dosyasını
-# Docker'ın içine kopyalıyoruz. Bu dosyanın Dockerfile ile yan yana olduğundan emin ol.
-COPY handler.py .
+# --- DEĞİŞEN KISIM BURASI ---
 
-# 🔥 KRİTİK HAMLE: BUILD SIRASINDA İNDİRME 🔥
-# Bu komut, handler.py içindeki ensure_ckpts() fonksiyonunu çalıştırır.
-# Modelleri (15GB+) indirip imajın içine kaydeder.
-# NOT: Bu adım internet hızına göre 10-20 dakika sürebilir. Bekle, kapatma.
-RUN python -c "from handler import ensure_ckpts; ensure_ckpts()"
+# 1. Önce sadece builder.py'yi kopyalıyoruz
+COPY builder.py .
+
+# 2. Modelleri indiriyoruz (Artık handler import edilmediği için patlamaz)
+RUN python builder.py
+
+# 3. İndirme bittikten sonra handler.py'yi kopyalıyoruz
+COPY handler.py .
 
 # 8. Başlatma
 CMD ["python", "-u", "handler.py"]
