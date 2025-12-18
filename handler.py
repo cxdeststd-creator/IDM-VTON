@@ -198,15 +198,16 @@ def img_to_b64(img):
     return base64.b64encode(buf.getvalue()).decode()
 
 # -------------------------------------------------
-# HANDLER
+# HANDLER (DÜZELTİLMİŞ VERSİYON)
 # -------------------------------------------------
 def handler(job):
     data = job["input"]
 
+    # 1. Resimleri PIL formatında açıyoruz
     human = b64_to_img(data["human_image"]).resize((768, 1024))
     garment = b64_to_img(data["garment_image"]).resize((768, 1024))
     
-    # Kumaş resmi bazen transparan gelebilir, arkasını beyaz yapalım
+    # Şeffaflık varsa düzelt
     if garment.mode == 'RGBA':
         garment = garment.convert('RGB')
 
@@ -216,10 +217,20 @@ def handler(job):
     mdl = load_model()
 
     with torch.no_grad():
+        # OpenPose için NumPy Array lazımdır
         human_np = np.array(human)
-        parsing = mdl["parsing"](human_np)
-        pose = mdl["openpose"](human_np)
+        
+        # --- DÜZELTME BURADA ---
+        # Parsing modülü NumPy Array kabul etmez, PIL Image ister!
+        # Eskisi: parsing = mdl["parsing"](human_np)  <-- HATALIYDI
+        
+        print("Run Parsing (PIL)...")
+        parsing = mdl["parsing"](human)  # <-- DOĞRUSU (PIL veriyoruz)
+        
+        print("Run OpenPose (Numpy)...")
+        pose = mdl["openpose"](human_np) # <-- OpenPose NumPy sever, bu doğru.
 
+        print("Run Pipeline...")
         result = mdl["pipe"](
             prompt="clothes",
             image=human,
