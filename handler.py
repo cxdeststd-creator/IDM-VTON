@@ -118,7 +118,7 @@ def load_model():
     if MODEL_LOADED:
         return model
 
-    ensure_ckpts()
+    #ensure_ckpts()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
