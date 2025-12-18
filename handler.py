@@ -9,23 +9,26 @@ from PIL import Image
 from huggingface_hub import hf_hub_download
 import runpod
 
+# --- YENİ EKLENEN IMPORTLAR (Hata Çözücü) ---
+from transformers import CLIPImageProcessor, CLIPVisionModelWithProjection
+
 # Global Değişkenler
 MODEL_LOADED = False
 model = {}
 BASE_REPO = "yisol/IDM-VTON"
 
 # -------------------------------------------------
-# 1. DOSYA İNDİRME (Eksik Parçaları Tamamlama)
+# 1. DOSYA İNDİRME (Eksik Parça: preprocessor_config.json)
 # -------------------------------------------------
 def ensure_ckpts():
-    print("⬇️ Model dosyaları (UNet Garm dahil) indiriliyor...")
+    print("⬇️ Model dosyaları indiriliyor (Feature Extractor eklendi)...")
     
     tasks = [
-        # --- 1. UNET GARM (StabilityAI'dan alıp ismini değiştiriyoruz) ---
+        # --- 1. UNET GARM (StabilityAI -> Yerel unet_garm) ---
         {
             "repo_id": "stabilityai/stable-diffusion-xl-base-1.0",
             "remote": "unet/config.json",
-            "locals": ["unet_garm/config.json"] # Klasör adını unet_garm yapıyoruz
+            "locals": ["unet_garm/config.json"]
         },
         {
             "repo_id": "stabilityai/stable-diffusion-xl-base-1.0",
@@ -33,7 +36,8 @@ def ensure_ckpts():
             "locals": ["unet_garm/diffusion_pytorch_model.safetensors"] 
         },
 
-        # --- 2. IMAGE ENCODER (Laion'dan) ---
+        # --- 2. IMAGE ENCODER & FEATURE EXTRACTOR (Laion) ---
+        # HATA BURADAYDI: preprocessor_config.json eksikti. Ekledik.
         {
             "repo_id": "laion/CLIP-ViT-H-14-laion2B-s32B-b79K",
             "remote": "config.json",
@@ -44,15 +48,20 @@ def ensure_ckpts():
             "remote": "model.safetensors", 
             "locals": ["image_encoder/model.safetensors"]
         },
+        {
+            "repo_id": "laion/CLIP-ViT-H-14-laion2B-s32B-b79K",
+            "remote": "preprocessor_config.json",   # <-- YENİ EKLENEN KRİTİK DOSYA
+            "locals": ["image_encoder/preprocessor_config.json"]
+        },
 
-        # --- 3. IP ADAPTER (h94'ten) ---
+        # --- 3. IP ADAPTER (h94) ---
         {
             "repo_id": "h94/IP-Adapter",
             "remote": "sdxl_models/ip-adapter-plus_sdxl_vit-h.bin",
             "locals": ["ip_adapter/adapter_model.bin"]
         },
 
-        # --- 4. OPENPOSE (Yisol - Çift Dikiş) ---
+        # --- 4. OPENPOSE (Yisol) ---
         {
             "repo_id": "yisol/IDM-VTON",
             "remote": "openpose/ckpts/body_pose_model.pth",
@@ -101,7 +110,7 @@ def ensure_ckpts():
             print(f"✅ Hazır: {local_path}")
 
 # -------------------------------------------------
-# 2. MODEL LOAD (DÜZELTİLEN KISIM BURASI)
+# 2. MODEL LOAD (Pipe Feature Extractor Fix)
 # -------------------------------------------------
 def load_model():
     global MODEL_LOADED, model
@@ -109,12 +118,10 @@ def load_model():
     if MODEL_LOADED:
         return model
 
-    # Önce dosyaları indir
     ensure_ckpts()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # Importları burada yapıyoruz (Dosya yapına uygun)
     from preprocess.humanparsing.run_parsing import Parsing
     from preprocess.openpose.run_openpose import OpenPose
     from src.tryon_pipeline import StableDiffusionXLInpaintPipeline
@@ -126,33 +133,44 @@ def load_model():
     parsing = Parsing(0)
     openpose = OpenPose(0)
 
-    # Ana UNet (Hala Yisol'dan çekebilir, sorun yok)
+    # 1. Image Encoder ve Feature Extractor'ı yerel klasörden elle yüklüyoruz
+    # Böylece pipeline Yisol'un boş reposuna bakmak zorunda kalmıyor.
+    print("🔄 Image Encoder & Feature Extractor yükleniyor...")
+    image_encoder = CLIPVisionModelWithProjection.from_pretrained(
+        "image_encoder", 
+        torch_dtype=torch.float16
+    )
+    feature_extractor = CLIPImageProcessor.from_pretrained(
+        "image_encoder",
+        torch_dtype=torch.float16
+    )
+
+    # 2. Ana UNet
     unet = UNet2DConditionModel.from_pretrained(
         BASE_REPO,
         subfolder="unet",
         torch_dtype=torch.float16
     )
 
-    # --- KRİTİK DÜZELTME BURADA YAPILDI ---
-    # Eski hali: BASE_REPO ve subfolder="unet_garm" kullanıyordu (ve patlıyordu).
-    # Yeni hali: Direkt yerel klasör adını ("unet_garm") veriyoruz.
-    print("🔄 UNet Garm yerel klasörden yükleniyor...")
+    # 3. GarmNet (Yerel unet_garm klasöründen)
+    print("🔄 UNet Garm yükleniyor...")
     unet_garm = UNetGarm.from_pretrained(
-        "unet_garm",  # <-- Yerel klasör adı
+        "unet_garm",
         torch_dtype=torch.float16,
-        use_safetensors=True # Çünkü safetensors indirdik
+        use_safetensors=True
     )
 
-    # Pipeline oluşturma
-    print("🔄 Pipeline oluşturuluyor...")
+    # 4. Pipeline (Elle yüklediğimiz parçaları buraya veriyoruz)
+    print("🔄 Pipeline birleştiriliyor...")
     pipe = StableDiffusionXLInpaintPipeline.from_pretrained(
         BASE_REPO,
         unet=unet,
+        image_encoder=image_encoder,        # <-- ELLE VERDİK
+        feature_extractor=feature_extractor, # <-- ELLE VERDİK (Hata Çözücü)
         torch_dtype=torch.float16,
-        use_safetensors=True
+        use_safetensors=True,
     ).to(device)
 
-    # GarmNet'i pipeline'a monte et
     pipe.unet_garm = unet_garm
 
     model = {
@@ -163,7 +181,7 @@ def load_model():
     }
 
     MODEL_LOADED = True
-    print("✅ Tüm modeller başarıyla yüklendi!")
+    print("✅ Mükemmel! Sistem hazır.")
     return model
 
 # -------------------------------------------------
@@ -185,25 +203,23 @@ def img_to_b64(img):
 def handler(job):
     data = job["input"]
 
-    # Gelen resimleri işle
     human = b64_to_img(data["human_image"]).resize((768, 1024))
     garment = b64_to_img(data["garment_image"]).resize((768, 1024))
+    
+    # Kumaş resmi bazen transparan gelebilir, arkasını beyaz yapalım
+    if garment.mode == 'RGBA':
+        garment = garment.convert('RGB')
 
     steps = data.get("steps", 30)
     seed = data.get("seed", 42)
 
-    # Modeli al
     mdl = load_model()
 
-    # İşlem yap
     with torch.no_grad():
         human_np = np.array(human)
-        
-        # Preprocess
         parsing = mdl["parsing"](human_np)
         pose = mdl["openpose"](human_np)
 
-        # Try-On
         result = mdl["pipe"](
             prompt="clothes",
             image=human,
