@@ -72,7 +72,7 @@ def download_models():
                 os.makedirs(os.path.dirname(local), exist_ok=True)
                 shutil.copy(path, local)
         except Exception as e:
-            print(f"❌ HATA: {e}")
+            print(f"❌ HAATA: {e}")
             raise e
 
 if __name__ == "__main__":
