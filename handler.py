@@ -106,13 +106,14 @@ def handler(job):
             print("⚠️ OpenPose boş döndü, siyah pose kullanılıyor.")
             pose = Image.new("RGB", human.size, (0,0,0))
 
-        # 3. PIPELINE
+        # 3. PIPELINE (Parametre Adı Düzeltildi)
+        print("▶️ Run Pipeline...")
         result = mdl["pipe"](
             prompt="clothes",
             image=human,
             mask_image=mask_image,
             ip_adapter_image=garment,
-            pose=pose,
+            pose_img=pose,              # <--- İŞTE HATALI YER BURASIYDI (Eskisi: pose=pose)
             num_inference_steps=steps,
             guidance_scale=2.0,
             generator=torch.Generator(mdl["device"]).manual_seed(seed),
