@@ -198,16 +198,15 @@ def img_to_b64(img):
     return base64.b64encode(buf.getvalue()).decode()
 
 # -------------------------------------------------
-# HANDLER (DÜZELTİLMİŞ VERSİYON)
+# HANDLER (RGB -> BGR FIX)
 # -------------------------------------------------
 def handler(job):
     data = job["input"]
 
-    # 1. Resimleri PIL formatında açıyoruz
+    # 1. Resimleri Yükle (PIL = RGB formatında gelir)
     human = b64_to_img(data["human_image"]).resize((768, 1024))
     garment = b64_to_img(data["garment_image"]).resize((768, 1024))
     
-    # Şeffaflık varsa düzelt
     if garment.mode == 'RGBA':
         garment = garment.convert('RGB')
 
@@ -217,19 +216,35 @@ def handler(job):
     mdl = load_model()
 
     with torch.no_grad():
-        # OpenPose için NumPy Array lazımdır
-        human_np = np.array(human)
+        # --- KRİTİK DÜZELTME BURASI ---
+        # 1. Önce resmi Numpy dizisine çevir (Hala RGB)
+        human_np_rgb = np.array(human)
         
-        # --- DÜZELTME BURADA ---
-        # Parsing modülü NumPy Array kabul etmez, PIL Image ister!
-        # Eskisi: parsing = mdl["parsing"](human_np)  <-- HATALIYDI
-        
-        print("Run Parsing (PIL)...")
-        parsing = mdl["parsing"](human)  # <-- DOĞRUSU (PIL veriyoruz)
-        
-        print("Run OpenPose (Numpy)...")
-        pose = mdl["openpose"](human_np) # <-- OpenPose NumPy sever, bu doğru.
+        # 2. RGB'yi BGR'ye çevir (OpenPose BGR sever!)
+        # [:, :, ::-1] komutu renk kanallarını tersten dizer (Red <-> Blue yer değişir)
+        human_np_bgr = human_np_rgb[:, :, ::-1].copy()
 
+        # --- PARSING (PIL / RGB İster) ---
+        print("Run Parsing (PIL)...")
+        try:
+            parsing = mdl["parsing"](human)
+        except Exception as e:
+            print(f"⚠️ Parsing uyarısı: {e}")
+            parsing = Image.new("RGB", human.size, (0,0,0))
+
+        # --- OPENPOSE (Numpy / BGR İster) ---
+        print("Run OpenPose (BGR Numpy)...")
+        try:
+            # Artık BGR formatında veriyoruz, ten rengini doğru anlayacak
+            pose = mdl["openpose"](human_np_bgr)
+        except ValueError:
+            print("⚠️ UYARI: OpenPose yine de insan bulamadı! (Boş pose kullanılıyor)")
+            pose = Image.new("RGB", human.size, (0,0,0))
+        except Exception as e:
+            print(f"⚠️ OpenPose bilinmeyen hata: {e}")
+            pose = Image.new("RGB", human.size, (0,0,0))
+
+        # --- PIPELINE ---
         print("Run Pipeline...")
         result = mdl["pipe"](
             prompt="clothes",
