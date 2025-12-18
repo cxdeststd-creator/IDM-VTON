@@ -1,10 +1,10 @@
-# builder.py - Sadece Build sırasında çalışır
+# builder.py - TEMİZ İNDİRİCİ
 import os
 import shutil
 from huggingface_hub import hf_hub_download
 
 def download_models():
-    print("⬇️ BUILDER: Model dosyaları indiriliyor...")
+    print("⬇️ BUILDER BAŞLIYOR: Sadece modeller indiriliyor...")
     
     tasks = [
         # --- 1. UNET GARM (StabilityAI -> Yerel unet_garm) ---
@@ -18,7 +18,6 @@ def download_models():
             "remote": "unet/diffusion_pytorch_model.fp16.safetensors",
             "locals": ["unet_garm/diffusion_pytorch_model.safetensors"] 
         },
-
         # --- 2. IMAGE ENCODER & FEATURE EXTRACTOR (Laion) ---
         {
             "repo_id": "laion/CLIP-ViT-H-14-laion2B-s32B-b79K",
@@ -35,14 +34,12 @@ def download_models():
             "remote": "preprocessor_config.json",   
             "locals": ["image_encoder/preprocessor_config.json"]
         },
-
         # --- 3. IP ADAPTER (h94) ---
         {
             "repo_id": "h94/IP-Adapter",
             "remote": "sdxl_models/ip-adapter-plus_sdxl_vit-h.bin",
             "locals": ["ip_adapter/adapter_model.bin"]
         },
-
         # --- 4. OPENPOSE (Yisol) ---
         {
             "repo_id": "yisol/IDM-VTON",
@@ -52,7 +49,6 @@ def download_models():
                 "preprocess/openpose/ckpts/body_pose_model.pth"
             ]
         },
-        
         # --- 5. DENSEPOSE & HUMANPARSING (Yisol) ---
         {
             "repo_id": "yisol/IDM-VTON",
@@ -84,7 +80,6 @@ def download_models():
             )
         except Exception as e:
             print(f"❌ HATA: {remote_path} indirilemedi! Detay: {e}")
-            # Build sırasında hata olursa işlem dursun
             raise e
 
         for local_path in local_paths:
