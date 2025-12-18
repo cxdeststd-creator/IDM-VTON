@@ -6,6 +6,7 @@ import torch
 from PIL import Image, ImageOps
 import runpod
 from transformers import CLIPImageProcessor, CLIPVisionModelWithProjection
+from torchvision import transforms # <--- YENİ EKLENDİ
 
 MODEL_LOADED = False
 model = {}
@@ -15,8 +16,6 @@ def load_model():
     global MODEL_LOADED, model
     if MODEL_LOADED: return model
 
-    # ensure_ckpts() SİLİNDİ (Builder.py hallediyor)
-    
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"🔄 Modeller yükleniyor... Device: {device}")
 
@@ -69,7 +68,7 @@ def smart_resize(img, width, height):
 
 # --- HANDLER ---
 def handler(job):
-    print("🚀 GÜNCEL KOD BAŞLADI v5") # Log işareti
+    print("🚀 GÜNCEL KOD BAŞLADI v6 (Tensor Fix)")
     data = job["input"]
     
     human = smart_resize(b64_to_img(data["human_image"]), 768, 1024)
@@ -90,7 +89,7 @@ def handler(job):
         except:
             mask_image = Image.new("L", human.size, 0)
 
-        # 2. OPENPOSE (Süper Güvenli Blok)
+        # 2. OPENPOSE
         human_cv = np.array(human)[:, :, ::-1].copy() 
         pose = None
         try:
@@ -105,15 +104,21 @@ def handler(job):
         if pose is None:
             print("⚠️ OpenPose boş döndü, siyah pose kullanılıyor.")
             pose = Image.new("RGB", human.size, (0,0,0))
+        
+        # --- KRİTİK DÜZELTME BURADA ---
+        # PIL Resmini Tensor'a çeviriyoruz çünkü Pipeline Tensor istiyor
+        # .unsqueeze(0) ile batch boyutunu ekliyoruz: [1, 3, 1024, 768] oluyor
+        print("🔄 Pose resmi Tensor formatına çevriliyor...")
+        pose_tensor = transforms.ToTensor()(pose).unsqueeze(0)
+        # ------------------------------
 
-        # 3. PIPELINE (Parametre Adı Düzeltildi)
-        print("▶️ Run Pipeline...")
+        # 3. PIPELINE
         result = mdl["pipe"](
             prompt="clothes",
             image=human,
             mask_image=mask_image,
             ip_adapter_image=garment,
-            pose_img=pose,              # <--- İŞTE HATALI YER BURASIYDI (Eskisi: pose=pose)
+            pose_img=pose_tensor,       # <--- ARTIK TENSOR YOLLUYORUZ
             num_inference_steps=steps,
             guidance_scale=2.0,
             generator=torch.Generator(mdl["device"]).manual_seed(seed),
