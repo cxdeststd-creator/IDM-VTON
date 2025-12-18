@@ -1,33 +1,96 @@
+# builder.py - Sadece Build sırasında çalışır
 import os
-import requests
+import shutil
+from huggingface_hub import hf_hub_download
 
-def download_file(url, path):
-    if os.path.exists(path):
-        print(f"✅ Dosya zaten var: {path}")
-        return
+def download_models():
+    print("⬇️ BUILDER: Model dosyaları indiriliyor...")
     
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    print(f"⬇️ İndiriliyor: {path}...")
-    
-    try:
-        response = requests.get(url, stream=True)
-        if response.status_code == 200:
-            with open(path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=1024*1024):
-                    if chunk: f.write(chunk)
-            print(f"🎉 İndirme tamamlandı: {path}")
-        else:
-            print(f"❌ HATA: Link bozuk ({response.status_code}): {url}")
-    except Exception as e:
-        print(f"❌ HATA: {e}")
+    tasks = [
+        # --- 1. UNET GARM (StabilityAI -> Yerel unet_garm) ---
+        {
+            "repo_id": "stabilityai/stable-diffusion-xl-base-1.0",
+            "remote": "unet/config.json",
+            "locals": ["unet_garm/config.json"]
+        },
+        {
+            "repo_id": "stabilityai/stable-diffusion-xl-base-1.0",
+            "remote": "unet/diffusion_pytorch_model.fp16.safetensors",
+            "locals": ["unet_garm/diffusion_pytorch_model.safetensors"] 
+        },
 
-# 1. HumanParsing Modelleri
-download_file("https://huggingface.co/spaces/yisol/IDM-VTON/resolve/main/ckpt/humanparsing/parsing_atr.onnx", "ckpt/humanparsing/parsing_atr.onnx")
-download_file("https://huggingface.co/spaces/yisol/IDM-VTON/resolve/main/ckpt/humanparsing/parsing_lip.onnx", "ckpt/humanparsing/parsing_lip.onnx")
+        # --- 2. IMAGE ENCODER & FEATURE EXTRACTOR (Laion) ---
+        {
+            "repo_id": "laion/CLIP-ViT-H-14-laion2B-s32B-b79K",
+            "remote": "config.json",
+            "locals": ["image_encoder/config.json"]
+        },
+        {
+            "repo_id": "laion/CLIP-ViT-H-14-laion2B-s32B-b79K",
+            "remote": "model.safetensors", 
+            "locals": ["image_encoder/model.safetensors"]
+        },
+        {
+            "repo_id": "laion/CLIP-ViT-H-14-laion2B-s32B-b79K",
+            "remote": "preprocessor_config.json",   
+            "locals": ["image_encoder/preprocessor_config.json"]
+        },
 
-# 2. OpenPose Modelleri (ControlNet Orijinal)
-download_file("https://huggingface.co/lllyasviel/ControlNet/resolve/main/annotator/ckpts/body_pose_model.pth", "ckpt/openpose/body_pose_model.pth")
-download_file("https://huggingface.co/lllyasviel/ControlNet/resolve/main/annotator/ckpts/hand_pose_model.pth", "ckpt/openpose/hand_pose_model.pth")
+        # --- 3. IP ADAPTER (h94) ---
+        {
+            "repo_id": "h94/IP-Adapter",
+            "remote": "sdxl_models/ip-adapter-plus_sdxl_vit-h.bin",
+            "locals": ["ip_adapter/adapter_model.bin"]
+        },
 
-# 3. DensePose Modeli (Facebook Orijinal Sunucusu - ASLA BOZULMAZ)
-download_file("https://dl.fbaipublicfiles.com/densepose/densepose_rcnn_R_50_FPN_s1x/165712039/model_final_162be9.pkl", "ckpt/densepose/model_final_162be9.pkl")
+        # --- 4. OPENPOSE (Yisol) ---
+        {
+            "repo_id": "yisol/IDM-VTON",
+            "remote": "openpose/ckpts/body_pose_model.pth",
+            "locals": [
+                "ckpt/openpose/ckpts/body_pose_model.pth",
+                "preprocess/openpose/ckpts/body_pose_model.pth"
+            ]
+        },
+        
+        # --- 5. DENSEPOSE & HUMANPARSING (Yisol) ---
+        {
+            "repo_id": "yisol/IDM-VTON",
+            "remote": "densepose/model_final_162be9.pkl",
+            "locals": ["ckpt/densepose/densepose_model.pkl"]
+        },
+        {
+            "repo_id": "yisol/IDM-VTON",
+            "remote": "humanparsing/parsing_atr.onnx",
+            "locals": ["ckpt/humanparsing/parsing_atr.onnx"]
+        },
+        {
+            "repo_id": "yisol/IDM-VTON",
+            "remote": "humanparsing/parsing_lip.onnx",
+            "locals": ["ckpt/humanparsing/parsing_lip.onnx"]
+        }
+    ]
+
+    for task in tasks:
+        repo_id = task["repo_id"]
+        remote_path = task["remote"]
+        local_paths = task["locals"]
+
+        try:
+            print(f"⏳ İndiriliyor ({repo_id}): {remote_path}")
+            downloaded_file_path = hf_hub_download(
+                repo_id=repo_id,
+                filename=remote_path
+            )
+        except Exception as e:
+            print(f"❌ HATA: {remote_path} indirilemedi! Detay: {e}")
+            # Build sırasında hata olursa işlem dursun
+            raise e
+
+        for local_path in local_paths:
+            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+            shutil.copy(downloaded_file_path, local_path)
+            print(f"✅ Hazır: {local_path}")
+
+if __name__ == "__main__":
+    download_models()
