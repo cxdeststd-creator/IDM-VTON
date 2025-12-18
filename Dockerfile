@@ -6,7 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
 
-# 3. Sistem Paketleri (Insightface için build-essential ve python3-dev şart)
+# 3. Sistem Paketleri
 RUN apt-get update && apt-get install -y \
     python3.10 \
     python3-dev \
@@ -31,6 +31,7 @@ RUN pip install torch==2.1.0+cu118 \
     --no-deps
 
 # 5. Temel Kütüphaneler (Runpod ve Insightface ekli)
+# transformers'ı burada kuruyoruz ki aşağıdaki import'lar çalışsın
 RUN pip install \
     numpy==1.26.4 \
     pillow==10.2.0 \
@@ -46,7 +47,7 @@ RUN pip install \
     scipy \
     insightface
 
-# 6. Diffusers (Senin repon 0.25.0'a göre ayarlandığı için bunu kuruyoruz)
+# 6. Diffusers ve HuggingFace
 RUN pip install \
     diffusers==0.25.0 \
     transformers==4.36.2 \
@@ -57,18 +58,23 @@ RUN pip install \
     xformers==0.0.22.post7 \
     --no-deps
 
-# 7. SENİN GITHUB REPONU ÇEKİYORUZ
+# 7. REPONU ÇEKİYORUZ
 WORKDIR /app
-
-# Yisol yerine senin reponu yazıyoruz:
 RUN git clone https://github.com/cxdeststd-creator/IDM-VTON.git
 
 # Repo içine giriyoruz
 WORKDIR /app/IDM-VTON
 
-# NOT: handler.py dosyasını GitHub repona yüklediysen alttaki COPY komutuna gerek yok.
-# Ama eğer yüklemediysen veya emin değilsen bu satır kalsın, zarar gelmez.
+# ⚠️ ÖNEMLİ ADIM:
+# Bilgisayarındaki son düzenlediğin (ensure_ckpts fonksiyonlu) handler.py dosyasını
+# Docker'ın içine kopyalıyoruz. Bu dosyanın Dockerfile ile yan yana olduğundan emin ol.
 COPY handler.py .
+
+# 🔥 KRİTİK HAMLE: BUILD SIRASINDA İNDİRME 🔥
+# Bu komut, handler.py içindeki ensure_ckpts() fonksiyonunu çalıştırır.
+# Modelleri (15GB+) indirip imajın içine kaydeder.
+# NOT: Bu adım internet hızına göre 10-20 dakika sürebilir. Bekle, kapatma.
+RUN python -c "from handler import ensure_ckpts; ensure_ckpts()"
 
 # 8. Başlatma
 CMD ["python", "-u", "handler.py"]
