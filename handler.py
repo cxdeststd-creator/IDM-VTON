@@ -29,36 +29,30 @@ def load_model():
     openpose = OpenPose(0)
 
     # 1. Yardımcı Modeller
-    image_encoder = CLIPVisionModelWithProjection.from_pretrained("image_encoder", torch_dtype=torch.float16)
+    image_encoder = CLIPVisionModelWithProjection.from_pretrained("image_encoder", torch_dtype=torch.float16).to(device)
     feature_extractor = CLIPImageProcessor.from_pretrained("image_encoder", torch_dtype=torch.float16)
     
     # 2. UNet Modelleri
-    # Senin dediğin gibi değişken adını da unet_encoder yapıyorum kafa karışmasın
-    unet = UNet2DConditionModel.from_pretrained(BASE_REPO, subfolder="unet", torch_dtype=torch.float16)
-    unet_encoder = UNetGarm.from_pretrained("unet_garm", torch_dtype=torch.float16, use_safetensors=True)
+    unet = UNet2DConditionModel.from_pretrained(BASE_REPO, subfolder="unet", torch_dtype=torch.float16).to(device)
+    
+    # --- KRİTİK DÜZELTME BURADA ---
+    # Model yüklenir yüklenmez .to(device) diyoruz ki CPU'da unutulmasın!
+    unet_encoder = UNetGarm.from_pretrained("unet_garm", torch_dtype=torch.float16, use_safetensors=True).to(device)
+    # ------------------------------
 
-    # 3. Pipeline Kurulumu (Boş Başlatıyoruz)
+    # 3. Pipeline Kurulumu
     pipe = StableDiffusionXLInpaintPipeline.from_pretrained(
         BASE_REPO,
         unet=unet,
         image_encoder=image_encoder,
         feature_extractor=feature_extractor,
+        unet_encoder=unet_encoder, # GPU'ya atılmış halini veriyoruz
         torch_dtype=torch.float16,
         use_safetensors=True,
     ).to(device)
     
-    # --- KRİTİK NOKTA: RESMİ KAYIT ---
-    # Elle atama yapmak yerine, sistemi buna zorluyoruz.
-    print("⚙️ UNet Encoder sisteme register ediliyor...")
-    pipe.register_modules(unet_encoder=unet_encoder)
-    
-    # Sağlama yapalım: Eğer hala None ise manuel çakalım
-    if pipe.unet_encoder is None:
-        print("⚠️ Register yetmedi, manuel atanıyor!")
-        pipe.unet_encoder = unet_encoder
-    else:
-        print("✅ UNet Encoder başarıyla yüklendi.")
-    # ----------------------------------
+    # Çift dikiş garanti olsun
+    pipe.unet_encoder = unet_encoder
 
     model = {"pipe": pipe, "parsing": parsing, "openpose": openpose, "device": device}
     MODEL_LOADED = True
@@ -84,7 +78,7 @@ def smart_resize(img, width, height):
 
 # --- HANDLER ---
 def handler(job):
-    print("🚀 GÜNCEL KOD BAŞLADI v11 (Register Fix)")
+    print("🚀 GÜNCEL KOD BAŞLADI v12 (GPU Sync)")
     data = job["input"]
     
     human = smart_resize(b64_to_img(data["human_image"]), 768, 1024)
@@ -123,8 +117,12 @@ def handler(job):
         
         # --- TENSOR HAZIRLIK ---
         print("🔄 Tensor Dönüşümleri...")
-        pose_tensor = transforms.ToTensor()(pose).unsqueeze(0).to(mdl["device"], dtype=torch.float16)
-        cloth_tensor = transforms.ToTensor()(garment).unsqueeze(0).to(mdl["device"], dtype=torch.float16)
+        # Device ve Dtype garantisi
+        device = mdl["device"]
+        dtype = torch.float16
+        
+        pose_tensor = transforms.ToTensor()(pose).unsqueeze(0).to(device, dtype=dtype)
+        cloth_tensor = transforms.ToTensor()(garment).unsqueeze(0).to(device, dtype=dtype)
         
         # 3. PIPELINE
         result = mdl["pipe"](
@@ -136,7 +134,7 @@ def handler(job):
             pose_img=pose_tensor,
             num_inference_steps=steps,
             guidance_scale=2.0,
-            generator=torch.Generator(mdl["device"]).manual_seed(seed),
+            generator=torch.Generator(device).manual_seed(seed),
             height=1024,
             width=768
         ).images[0]
