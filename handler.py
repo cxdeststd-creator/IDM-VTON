@@ -48,7 +48,8 @@ def load_model():
     feature_extractor = CLIPImageProcessor.from_pretrained("image_encoder", torch_dtype=torch.float16)
     
     # 3. UNet Modülleri
-    uunet = UNet2DConditionModel.from_pretrained("ckpt/unet", torch_dtype=torch.float16, use_safetensors=True).to(device)
+    # .bin dosyasını okuması için use_safetensors parametresini kaldırıyoruz:
+    unet = UNet2DConditionModel.from_pretrained("ckpt/unet", torch_dtype=torch.float16).to(device)
     unet_encoder = UNetGarm.from_pretrained("unet_garm", torch_dtype=torch.float16, use_safetensors=True).to(device)
 
     # 4. Pipeline Kurulumu (FULL PAKET)
