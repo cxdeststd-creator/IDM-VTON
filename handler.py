@@ -28,30 +28,37 @@ def load_model():
     parsing = Parsing(0)
     openpose = OpenPose(0)
 
-    # Yardımcı Modeller
+    # 1. Yardımcı Modeller
     image_encoder = CLIPVisionModelWithProjection.from_pretrained("image_encoder", torch_dtype=torch.float16)
     feature_extractor = CLIPImageProcessor.from_pretrained("image_encoder", torch_dtype=torch.float16)
     
-    # UNet Modelleri
+    # 2. UNet Modelleri
+    # Senin dediğin gibi değişken adını da unet_encoder yapıyorum kafa karışmasın
     unet = UNet2DConditionModel.from_pretrained(BASE_REPO, subfolder="unet", torch_dtype=torch.float16)
-    unet_garm = UNetGarm.from_pretrained("unet_garm", torch_dtype=torch.float16, use_safetensors=True)
+    unet_encoder = UNetGarm.from_pretrained("unet_garm", torch_dtype=torch.float16, use_safetensors=True)
 
-    # --- PIPELINE OLUŞTURMA (ARTIK MONTAJI BURADA YAPIYORUZ) ---
+    # 3. Pipeline Kurulumu (Boş Başlatıyoruz)
     pipe = StableDiffusionXLInpaintPipeline.from_pretrained(
         BASE_REPO,
         unet=unet,
         image_encoder=image_encoder,
         feature_extractor=feature_extractor,
-        # İŞTE BURASI! Sonradan eklemek yerine direkt içeri veriyoruz:
-        unet_encoder=unet_garm, 
         torch_dtype=torch.float16,
         use_safetensors=True,
     ).to(device)
     
-    # Her ihtimale karşı yine de attribute olarak da set edelim (Çift dikiş)
-    if not hasattr(pipe, "unet_encoder") or pipe.unet_encoder is None:
-        print("⚠️ Uyarı: Init sırasında unet_encoder oturmadı, manuel set ediliyor.")
-        pipe.unet_encoder = unet_garm
+    # --- KRİTİK NOKTA: RESMİ KAYIT ---
+    # Elle atama yapmak yerine, sistemi buna zorluyoruz.
+    print("⚙️ UNet Encoder sisteme register ediliyor...")
+    pipe.register_modules(unet_encoder=unet_encoder)
+    
+    # Sağlama yapalım: Eğer hala None ise manuel çakalım
+    if pipe.unet_encoder is None:
+        print("⚠️ Register yetmedi, manuel atanıyor!")
+        pipe.unet_encoder = unet_encoder
+    else:
+        print("✅ UNet Encoder başarıyla yüklendi.")
+    # ----------------------------------
 
     model = {"pipe": pipe, "parsing": parsing, "openpose": openpose, "device": device}
     MODEL_LOADED = True
@@ -77,7 +84,7 @@ def smart_resize(img, width, height):
 
 # --- HANDLER ---
 def handler(job):
-    print("🚀 GÜNCEL KOD BAŞLADI v10 (Init Injection)")
+    print("🚀 GÜNCEL KOD BAŞLADI v11 (Register Fix)")
     data = job["input"]
     
     human = smart_resize(b64_to_img(data["human_image"]), 768, 1024)
@@ -114,8 +121,8 @@ def handler(job):
             print("⚠️ OpenPose boş döndü, siyah pose kullanılıyor.")
             pose = Image.new("RGB", human.size, (0,0,0))
         
-        # --- HAZIRLIK ---
-        print("🔄 Resimler Tensor ve Float16 formatına çevriliyor...")
+        # --- TENSOR HAZIRLIK ---
+        print("🔄 Tensor Dönüşümleri...")
         pose_tensor = transforms.ToTensor()(pose).unsqueeze(0).to(mdl["device"], dtype=torch.float16)
         cloth_tensor = transforms.ToTensor()(garment).unsqueeze(0).to(mdl["device"], dtype=torch.float16)
         
