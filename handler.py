@@ -5,8 +5,14 @@ import numpy as np
 import torch
 from PIL import Image, ImageOps
 import runpod
-from transformers import CLIPImageProcessor, CLIPVisionModelWithProjection
 from torchvision import transforms 
+from transformers import (
+    CLIPImageProcessor, 
+    CLIPVisionModelWithProjection,
+    CLIPTextModel,
+    CLIPTextModelWithProjection,
+    AutoTokenizer
+)
 
 MODEL_LOADED = False
 model = {}
@@ -17,7 +23,7 @@ def load_model():
     if MODEL_LOADED: return model
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"🔄 Modeller yükleniyor... Device: {device}")
+    print(f"🔄 Modeller YERELDEN (ckpt/) yükleniyor... Device: {device}")
 
     from preprocess.humanparsing.run_parsing import Parsing
     from preprocess.openpose.run_openpose import OpenPose
@@ -28,35 +34,44 @@ def load_model():
     parsing = Parsing(0)
     openpose = OpenPose(0)
 
-    # 1. Yardımcı Modeller
+    # --- 1. METİN MODÜLLERİ (YERELDEN) ---
+    # Artık "ckpt/..." klasöründen çekiyoruz, internet yok!
+    tokenizer = AutoTokenizer.from_pretrained("ckpt/tokenizer")
+    tokenizer_2 = AutoTokenizer.from_pretrained("ckpt/tokenizer_2")
+    
+    text_encoder = CLIPTextModel.from_pretrained("ckpt/text_encoder", torch_dtype=torch.float16).to(device)
+    text_encoder_2 = CLIPTextModelWithProjection.from_pretrained("ckpt/text_encoder_2", torch_dtype=torch.float16).to(device)
+
+    # 2. Görüntü Modülleri
+    # Bunları zaten builder indiriyordu ama klasör yollarını yerel yapalım garanti olsun
     image_encoder = CLIPVisionModelWithProjection.from_pretrained("image_encoder", torch_dtype=torch.float16).to(device)
     feature_extractor = CLIPImageProcessor.from_pretrained("image_encoder", torch_dtype=torch.float16)
     
-    # 2. UNet Modelleri
-    unet = UNet2DConditionModel.from_pretrained(BASE_REPO, subfolder="unet", torch_dtype=torch.float16).to(device)
-    
-    # --- KRİTİK DÜZELTME BURADA ---
-    # Model yüklenir yüklenmez .to(device) diyoruz ki CPU'da unutulmasın!
+    # 3. UNet Modülleri
+    unet = UNet2DConditionModel.from_pretrained("ckpt/unet", torch_dtype=torch.float16).to(device)
     unet_encoder = UNetGarm.from_pretrained("unet_garm", torch_dtype=torch.float16, use_safetensors=True).to(device)
-    # ------------------------------
 
-    # 3. Pipeline Kurulumu
+    # 4. Pipeline Kurulumu (FULL PAKET)
+    # BASE_REPO yerine "ckpt" veya lokal yol veriyoruz ki internete bakmasın
     pipe = StableDiffusionXLInpaintPipeline.from_pretrained(
-        BASE_REPO,
+        "ckpt", 
         unet=unet,
+        unet_encoder=unet_encoder,
         image_encoder=image_encoder,
         feature_extractor=feature_extractor,
-        unet_encoder=unet_encoder, # GPU'ya atılmış halini veriyoruz
+        text_encoder=text_encoder,
+        text_encoder_2=text_encoder_2,
+        tokenizer=tokenizer,
+        tokenizer_2=tokenizer_2,
         torch_dtype=torch.float16,
         use_safetensors=True,
     ).to(device)
     
-    # Çift dikiş garanti olsun
-    pipe.unet_encoder = unet_encoder
+    pipe.register_modules(unet_encoder=unet_encoder)
 
     model = {"pipe": pipe, "parsing": parsing, "openpose": openpose, "device": device}
     MODEL_LOADED = True
-    print("✅ Sistem Hazır!")
+    print("✅ Sistem Hazır! (Full Local Load)")
     return model
 
 # --- HELPER ---
@@ -78,7 +93,7 @@ def smart_resize(img, width, height):
 
 # --- HANDLER ---
 def handler(job):
-    print("🚀 GÜNCEL KOD BAŞLADI v12 (GPU Sync)")
+    print("🚀 GÜNCEL KOD BAŞLADI v14 (Builder Fix)")
     data = job["input"]
     
     human = smart_resize(b64_to_img(data["human_image"]), 768, 1024)
@@ -117,7 +132,6 @@ def handler(job):
         
         # --- TENSOR HAZIRLIK ---
         print("🔄 Tensor Dönüşümleri...")
-        # Device ve Dtype garantisi
         device = mdl["device"]
         dtype = torch.float16
         
