@@ -42,7 +42,10 @@ def load_model():
         use_safetensors=True,
     ).to(device)
     
-    pipe.unet_garm = unet_garm
+    # --- İŞTE HATALI OLAN KISIM BURASIYDI, DÜZELTTİK ---
+    # Pipeline bunu "unet_encoder" diye arıyor, biz unet_garm demiştik.
+    pipe.unet_encoder = unet_garm 
+    # ---------------------------------------------------
 
     model = {"pipe": pipe, "parsing": parsing, "openpose": openpose, "device": device}
     MODEL_LOADED = True
@@ -68,7 +71,7 @@ def smart_resize(img, width, height):
 
 # --- HANDLER ---
 def handler(job):
-    print("🚀 GÜNCEL KOD BAŞLADI v8 (Float16 Fix)")
+    print("🚀 GÜNCEL KOD BAŞLADI v9 (Encoder Fix)")
     data = job["input"]
     
     human = smart_resize(b64_to_img(data["human_image"]), 768, 1024)
@@ -105,14 +108,11 @@ def handler(job):
             print("⚠️ OpenPose boş döndü, siyah pose kullanılıyor.")
             pose = Image.new("RGB", human.size, (0,0,0))
         
-        # --- HAZIRLIK: TENSOR ÇEVRİMLERİ ---
+        # --- HAZIRLIK ---
         print("🔄 Resimler Tensor ve Float16 formatına çevriliyor...")
-        
-        # DEĞİŞİKLİK BURADA: .to(device, dtype=torch.float16) ekledik!
         pose_tensor = transforms.ToTensor()(pose).unsqueeze(0).to(mdl["device"], dtype=torch.float16)
         cloth_tensor = transforms.ToTensor()(garment).unsqueeze(0).to(mdl["device"], dtype=torch.float16)
-        # -----------------------------------
-
+        
         # 3. PIPELINE
         result = mdl["pipe"](
             prompt="clothes",
