@@ -68,7 +68,7 @@ def smart_resize(img, width, height):
 
 # --- HANDLER ---
 def handler(job):
-    print("🚀 GÜNCEL KOD BAŞLADI v7 (Cloth Fix)")
+    print("🚀 GÜNCEL KOD BAŞLADI v8 (Float16 Fix)")
     data = job["input"]
     
     human = smart_resize(b64_to_img(data["human_image"]), 768, 1024)
@@ -106,9 +106,11 @@ def handler(job):
             pose = Image.new("RGB", human.size, (0,0,0))
         
         # --- HAZIRLIK: TENSOR ÇEVRİMLERİ ---
-        print("🔄 Resimler Tensor'a çevriliyor...")
-        pose_tensor = transforms.ToTensor()(pose).unsqueeze(0)
-        cloth_tensor = transforms.ToTensor()(garment).unsqueeze(0) # <--- YENİ EKLENDİ
+        print("🔄 Resimler Tensor ve Float16 formatına çevriliyor...")
+        
+        # DEĞİŞİKLİK BURADA: .to(device, dtype=torch.float16) ekledik!
+        pose_tensor = transforms.ToTensor()(pose).unsqueeze(0).to(mdl["device"], dtype=torch.float16)
+        cloth_tensor = transforms.ToTensor()(garment).unsqueeze(0).to(mdl["device"], dtype=torch.float16)
         # -----------------------------------
 
         # 3. PIPELINE
@@ -116,8 +118,8 @@ def handler(job):
             prompt="clothes",
             image=human,
             mask_image=mask_image,
-            ip_adapter_image=garment, # Bu PIL olarak kalmalı (Feature Extractor için)
-            cloth=cloth_tensor,       # <--- BU EKSİKTİ! (VAE için Tensor lazım)
+            ip_adapter_image=garment, 
+            cloth=cloth_tensor,       
             pose_img=pose_tensor,
             num_inference_steps=steps,
             guidance_scale=2.0,
