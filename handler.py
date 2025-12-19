@@ -6,7 +6,7 @@ import torch
 from PIL import Image, ImageOps
 import runpod
 from transformers import CLIPImageProcessor, CLIPVisionModelWithProjection
-from torchvision import transforms # <--- YENİ EKLENDİ
+from torchvision import transforms 
 
 MODEL_LOADED = False
 model = {}
@@ -68,7 +68,7 @@ def smart_resize(img, width, height):
 
 # --- HANDLER ---
 def handler(job):
-    print("🚀 GÜNCEL KOD BAŞLADI v6 (Tensor Fix)")
+    print("🚀 GÜNCEL KOD BAŞLADI v7 (Cloth Fix)")
     data = job["input"]
     
     human = smart_resize(b64_to_img(data["human_image"]), 768, 1024)
@@ -105,20 +105,20 @@ def handler(job):
             print("⚠️ OpenPose boş döndü, siyah pose kullanılıyor.")
             pose = Image.new("RGB", human.size, (0,0,0))
         
-        # --- KRİTİK DÜZELTME BURADA ---
-        # PIL Resmini Tensor'a çeviriyoruz çünkü Pipeline Tensor istiyor
-        # .unsqueeze(0) ile batch boyutunu ekliyoruz: [1, 3, 1024, 768] oluyor
-        print("🔄 Pose resmi Tensor formatına çevriliyor...")
+        # --- HAZIRLIK: TENSOR ÇEVRİMLERİ ---
+        print("🔄 Resimler Tensor'a çevriliyor...")
         pose_tensor = transforms.ToTensor()(pose).unsqueeze(0)
-        # ------------------------------
+        cloth_tensor = transforms.ToTensor()(garment).unsqueeze(0) # <--- YENİ EKLENDİ
+        # -----------------------------------
 
         # 3. PIPELINE
         result = mdl["pipe"](
             prompt="clothes",
             image=human,
             mask_image=mask_image,
-            ip_adapter_image=garment,
-            pose_img=pose_tensor,       # <--- ARTIK TENSOR YOLLUYORUZ
+            ip_adapter_image=garment, # Bu PIL olarak kalmalı (Feature Extractor için)
+            cloth=cloth_tensor,       # <--- BU EKSİKTİ! (VAE için Tensor lazım)
+            pose_img=pose_tensor,
             num_inference_steps=steps,
             guidance_scale=2.0,
             generator=torch.Generator(mdl["device"]).manual_seed(seed),
