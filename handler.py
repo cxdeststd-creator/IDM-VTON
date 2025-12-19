@@ -28,24 +28,30 @@ def load_model():
     parsing = Parsing(0)
     openpose = OpenPose(0)
 
+    # Yardımcı Modeller
     image_encoder = CLIPVisionModelWithProjection.from_pretrained("image_encoder", torch_dtype=torch.float16)
     feature_extractor = CLIPImageProcessor.from_pretrained("image_encoder", torch_dtype=torch.float16)
+    
+    # UNet Modelleri
     unet = UNet2DConditionModel.from_pretrained(BASE_REPO, subfolder="unet", torch_dtype=torch.float16)
     unet_garm = UNetGarm.from_pretrained("unet_garm", torch_dtype=torch.float16, use_safetensors=True)
 
+    # --- PIPELINE OLUŞTURMA (ARTIK MONTAJI BURADA YAPIYORUZ) ---
     pipe = StableDiffusionXLInpaintPipeline.from_pretrained(
         BASE_REPO,
         unet=unet,
         image_encoder=image_encoder,
         feature_extractor=feature_extractor,
+        # İŞTE BURASI! Sonradan eklemek yerine direkt içeri veriyoruz:
+        unet_encoder=unet_garm, 
         torch_dtype=torch.float16,
         use_safetensors=True,
     ).to(device)
     
-    # --- İŞTE HATALI OLAN KISIM BURASIYDI, DÜZELTTİK ---
-    # Pipeline bunu "unet_encoder" diye arıyor, biz unet_garm demiştik.
-    pipe.unet_encoder = unet_garm 
-    # ---------------------------------------------------
+    # Her ihtimale karşı yine de attribute olarak da set edelim (Çift dikiş)
+    if not hasattr(pipe, "unet_encoder") or pipe.unet_encoder is None:
+        print("⚠️ Uyarı: Init sırasında unet_encoder oturmadı, manuel set ediliyor.")
+        pipe.unet_encoder = unet_garm
 
     model = {"pipe": pipe, "parsing": parsing, "openpose": openpose, "device": device}
     MODEL_LOADED = True
@@ -71,7 +77,7 @@ def smart_resize(img, width, height):
 
 # --- HANDLER ---
 def handler(job):
-    print("🚀 GÜNCEL KOD BAŞLADI v9 (Encoder Fix)")
+    print("🚀 GÜNCEL KOD BAŞLADI v10 (Init Injection)")
     data = job["input"]
     
     human = smart_resize(b64_to_img(data["human_image"]), 768, 1024)
