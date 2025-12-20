@@ -20,7 +20,6 @@ RUN git clone https://github.com/cxdeststd-creator/IDM-VTON.git
 WORKDIR /app/IDM-VTON
 
 # --- KRİTİK BÖLÜM: MODEL İNDİRME (BURASI DEĞİŞTİ) ---
-# builder.py dosyasıyla uğraşma. Direkt komutu buraya yazdım.
 # Bu komut 'ckpt' klasörünün içine eksik olan 'unet' klasörünü indirip koyacak.
 RUN huggingface-cli download yisol/IDM-VTON --include "unet/*" --local-dir ckpt
 # ----------------------------------------------------
