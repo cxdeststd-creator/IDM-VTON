@@ -7,7 +7,7 @@ import shutil
 from PIL import Image, ImageOps
 import runpod
 from torchvision import transforms 
-from huggingface_hub import snapshot_download # <--- İŞTE BU REİS HER ŞEYİ ÇÖZECEK
+from huggingface_hub import snapshot_download
 
 from transformers import (
     CLIPImageProcessor, 
@@ -27,59 +27,62 @@ model = {}
 
 def download_everything():
     """
-    Tek tek dosya adı yazmak yok.
-    Klasörü komple indirir, eksik config kalmaz.
+    Cache varsa oradan okur (Symlink), yoksa indirir.
+    SameFileError hatasını çözer.
     """
-    print("⬇️ TÜM MODELLER VE CONFIGLER İNDİRİLİYOR (SNAPSHOT)...")
+    print("⬇️ MODELLER BAĞLANIYOR (SYMLINK)...")
     
     # 1. ANA MODEL (IDM-VTON) -> ckpt klasörüne
-    # ignore_patterns ile gereksiz dosyaları elemeye çalışmıyoruz, ne varsa gelsin.
-    if not os.path.exists("ckpt/model_index.json"):
-        print("📦 IDM-VTON Ana Repo İndiriliyor...")
-        snapshot_download(
-            repo_id="yisol/IDM-VTON",
-            local_dir="ckpt",
-            local_dir_use_symlinks=False # Gerçek dosya olsun, link olmasın
-        )
+    # local_dir_use_symlinks=True yaptık. Kopyalama hatası vermez, direkt bağlar.
+    snapshot_download(
+        repo_id="yisol/IDM-VTON",
+        local_dir="ckpt",
+        local_dir_use_symlinks=True  # <--- İŞTE ÇÖZÜM BURASI
+    )
     
-    # 2. IMAGE ENCODER (LAION) -> image_encoder klasörüne
-    if not os.path.exists("image_encoder/config.json"):
-        print("📦 Image Encoder İndiriliyor...")
-        snapshot_download(
-            repo_id="laion/CLIP-ViT-H-14-laion2B-s32B-b79K",
-            local_dir="image_encoder",
-            local_dir_use_symlinks=False
-        )
+    # 2. IMAGE ENCODER (LAION)
+    snapshot_download(
+        repo_id="laion/CLIP-ViT-H-14-laion2B-s32B-b79K",
+        local_dir="image_encoder",
+        local_dir_use_symlinks=True
+    )
 
-    # 3. UNET GARM (SDXL Base) -> unet_garm klasörüne
+    # 3. UNET GARM (SDXL Base)
     # Sadece UNet kısmını alıyoruz
-    if not os.path.exists("unet_garm/config.json"):
-        print("📦 Garm UNet İndiriliyor...")
-        snapshot_download(
-            repo_id="stabilityai/stable-diffusion-xl-base-1.0",
-            local_dir="unet_garm",
-            allow_patterns=["unet/*"], # Sadece unet klasörünü al
-            local_dir_use_symlinks=False
-        )
-        # İndikten sonra dosyaları bir üst klasöre taşıma düzeltmesi gerekebilir
-        # Ama biz path'i doğru verirsek gerek kalmaz.
+    snapshot_download(
+        repo_id="stabilityai/stable-diffusion-xl-base-1.0",
+        local_dir="unet_garm",
+        allow_patterns=["unet/*"], 
+        local_dir_use_symlinks=True
+    )
         
     # 4. OPENPOSE YEDEKLEME
-    # Kod bazen preprocess klasörüne bakıyor, oraya kopyalayalım.
+    # Burası kopyalama yapmak zorunda çünkü klasör yapısı farklı.
+    # Önce hedefi siliyoruz ki "SameFileError" vermesin.
     src_pose = "ckpt/openpose/ckpts/body_pose_model.pth"
     dst_pose = "preprocess/openpose/ckpts/body_pose_model.pth"
-    if os.path.exists(src_pose) and not os.path.exists(dst_pose):
-        print("🔄 OpenPose yedeği alınıyor...")
-        os.makedirs(os.path.dirname(dst_pose), exist_ok=True)
-        shutil.copy(src_pose, dst_pose)
+    
+    # Kaynak gerçek dosya değil de symlink ise onun gerçek yolunu bulalım
+    if os.path.islink(src_pose):
+        src_pose = os.path.realpath(src_pose)
 
-    print("✅ Tüm indirmeler tamamlandı.")
+    if os.path.exists(src_pose):
+        # Eğer hedef zaten varsa ve aynısıysa dokunma
+        if not os.path.exists(dst_pose):
+            print("🔄 OpenPose yedeği alınıyor...")
+            os.makedirs(os.path.dirname(dst_pose), exist_ok=True)
+            try:
+                shutil.copy(src_pose, dst_pose)
+            except shutil.SameFileError:
+                pass # Zaten aynıysa sorun yok devam et
+
+    print("✅ Dosya bağlantıları tamamlandı.")
 
 def load_model():
     global MODEL_LOADED, model
     if MODEL_LOADED: return model
 
-    # ÖNCE HER ŞEYİ İNDİR
+    # İNDİRME/BAĞLAMA
     download_everything()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -88,8 +91,7 @@ def load_model():
     parsing = Parsing(0)
     openpose = OpenPose(0)
 
-    # ARTIK HER ŞEY LOCALDE ("ckpt" ve diğer klasörlerde)
-    # HuggingFace'e gitmeyecek, diskten okuyacak.
+    # HuggingFace kütüphanesi symlinkleri otomatik tanır ve açar.
     
     tokenizer = AutoTokenizer.from_pretrained("ckpt", subfolder="tokenizer")
     tokenizer_2 = AutoTokenizer.from_pretrained("ckpt", subfolder="tokenizer_2")
@@ -103,14 +105,13 @@ def load_model():
     # UNet'ler
     unet = UNet2DConditionModel.from_pretrained("ckpt", subfolder="unet", torch_dtype=torch.float16).to(device)
     
-    # Garm Unet için path düzeltmesi: 
-    # snapshot "unet_garm/unet" içine indirmiş olabilir. Kontrol ediyoruz.
+    # Garm Unet path kontrolü
     garm_path = "unet_garm/unet" if os.path.exists("unet_garm/unet") else "unet_garm"
     unet_encoder = UNetGarm.from_pretrained(garm_path, torch_dtype=torch.float16, use_safetensors=True).to(device)
 
     # PIPELINE
     pipe = StableDiffusionXLInpaintPipeline.from_pretrained(
-        "ckpt", # ANA KLASÖR BURASI
+        "ckpt", 
         unet=unet,
         unet_encoder=unet_encoder,
         image_encoder=image_encoder,
@@ -127,7 +128,7 @@ def load_model():
 
     model = {"pipe": pipe, "parsing": parsing, "openpose": openpose, "device": device}
     MODEL_LOADED = True
-    print("✅ Sistem Hazır! (v27 - Snapshot Mode)")
+    print("✅ Sistem Hazır! (v28 - Symlink Mode)")
     return model
 
 # --- HELPER ---
@@ -149,7 +150,7 @@ def smart_resize(img, width, height):
 
 # --- HANDLER ---
 def handler(job):
-    print("🚀 HANDLER ÇALIŞIYOR (v27)")
+    print("🚀 HANDLER ÇALIŞIYOR (v28)")
     data = job["input"]
     
     try:
