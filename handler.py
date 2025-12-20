@@ -23,10 +23,6 @@ BASE_PATH = "ckpt"
 
 # --- GENEL İNDİRİCİ ---
 def ensure_file(local_path, url, min_size_mb=0):
-    """
-    Dosya yoksa veya boyutu limitin altındaysa indirir.
-    Small files (json/txt) için min_size_mb=0 verebilirsin.
-    """
     is_valid = False
     
     if os.path.exists(local_path):
@@ -36,7 +32,6 @@ def ensure_file(local_path, url, min_size_mb=0):
             try: os.remove(local_path)
             except: pass
         else:
-            # print(f"✅ Tamam: {local_path}") # Log kirliliği yapmasın
             is_valid = True
 
     if not is_valid:
@@ -47,16 +42,19 @@ def ensure_file(local_path, url, min_size_mb=0):
                 ["curl", "-L", "-o", local_path, "--retry", "3", url], 
                 check=True
             )
+            # İndirdikten sonra kontrol
+            if min_size_mb > 0:
+                new_size = os.path.getsize(local_path) / (1024 * 1024)
+                if new_size < min_size_mb:
+                    os.remove(local_path) # Bozuksa sil
+                    raise RuntimeError(f"İndirilen dosya çok küçük ({new_size:.2f} MB). Link yanlış olabilir: {url}")
+            
             print(f"🎉 İndi: {local_path}")
         except Exception as e:
             print(f"❌ İNDİRME HATASI: {e} -> {url}")
             raise e
 
 def download_folder_files(folder_files):
-    """
-    Toplu indirme yardımcısı
-    folder_files = [("local_path", "url", min_size), ...]
-    """
     print(f"📦 {len(folder_files)} dosya kontrol ediliyor...")
     for f in folder_files:
         ensure_file(f[0], f[1], f[2])
@@ -65,18 +63,23 @@ def load_model():
     global MODEL_LOADED, model
     if MODEL_LOADED: return model
 
-    print("🔧 SİSTEM EKSİK DOSYA KONTROLÜ BAŞLIYOR (v19)...")
+    print("🔧 SİSTEM ONARIMI VE YÜKLEME (v21 - BIN ONLY)...")
     
-    # 1. TOKENIZER (IDM-VTON)
-    # Bu dosyalar küçük olduğu için min_size=0 geçiyoruz
+    # --- ACİL TEMİZLİK: BOZUK SAFETENSORS VARSA YOK ET ---
+    # Kodun kafasını karıştıran o bozuk dosyayı bulursak siliyoruz.
+    corrupt_unet = "ckpt/unet/diffusion_pytorch_model.safetensors"
+    if os.path.exists(corrupt_unet):
+        print(f"🧹 SAFETENSORS TEMİZLENİYOR (BIN KULLANACAĞIZ): {corrupt_unet}")
+        os.remove(corrupt_unet)
+
     base_url = "https://huggingface.co/yisol/IDM-VTON/resolve/main"
-    
+
+    # 1. TOKENIZER
     tokenizer_files = [
         ("ckpt/tokenizer/tokenizer_config.json", f"{base_url}/tokenizer/tokenizer_config.json?download=true", 0),
         ("ckpt/tokenizer/vocab.json", f"{base_url}/tokenizer/vocab.json?download=true", 0),
         ("ckpt/tokenizer/merges.txt", f"{base_url}/tokenizer/merges.txt?download=true", 0),
         ("ckpt/tokenizer/special_tokens_map.json", f"{base_url}/tokenizer/special_tokens_map.json?download=true", 0),
-        
         ("ckpt/tokenizer_2/tokenizer_config.json", f"{base_url}/tokenizer_2/tokenizer_config.json?download=true", 0),
         ("ckpt/tokenizer_2/vocab.json", f"{base_url}/tokenizer_2/vocab.json?download=true", 0),
         ("ckpt/tokenizer_2/merges.txt", f"{base_url}/tokenizer_2/merges.txt?download=true", 0),
@@ -84,17 +87,16 @@ def load_model():
     ]
     download_folder_files(tokenizer_files)
 
-    # 2. TEXT ENCODER (IDM-VTON)
+    # 2. TEXT ENCODER
     text_encoder_files = [
         ("ckpt/text_encoder/config.json", f"{base_url}/text_encoder/config.json?download=true", 0),
-        ("ckpt/text_encoder/model.safetensors", f"{base_url}/text_encoder/model.safetensors?download=true", 200), # Büyük dosya
-        
+        ("ckpt/text_encoder/model.safetensors", f"{base_url}/text_encoder/model.safetensors?download=true", 200),
         ("ckpt/text_encoder_2/config.json", f"{base_url}/text_encoder_2/config.json?download=true", 0),
-        ("ckpt/text_encoder_2/model.safetensors", f"{base_url}/text_encoder_2/model.safetensors?download=true", 200), # Büyük dosya
+        ("ckpt/text_encoder_2/model.safetensors", f"{base_url}/text_encoder_2/model.safetensors?download=true", 200),
     ]
     download_folder_files(text_encoder_files)
 
-    # 3. VAE & SCHEDULER (IDM-VTON)
+    # 3. VAE & SCHEDULER
     vae_files = [
         ("ckpt/vae/config.json", f"{base_url}/vae/config.json?download=true", 0),
         ("ckpt/vae/diffusion_pytorch_model.safetensors", f"{base_url}/vae/diffusion_pytorch_model.safetensors?download=true", 100),
@@ -102,15 +104,14 @@ def load_model():
     ]
     download_folder_files(vae_files)
 
-    # 4. UNET (IDM-VTON) - Dockerfile indirmiş olabilir ama garanti olsun
+    # 4. UNET (SADECE .BIN İNDİRİYORUZ)
     unet_files = [
         ("ckpt/unet/config.json", f"{base_url}/unet/config.json?download=true", 0),
-        ("ckpt/unet/diffusion_pytorch_model.safetensors", f"{base_url}/unet/diffusion_pytorch_model.safetensors?download=true", 1000),
+        ("ckpt/unet/diffusion_pytorch_model.bin", f"{base_url}/unet/diffusion_pytorch_model.bin?download=true", 1000),
     ]
     download_folder_files(unet_files)
 
-    # 5. IMAGE ENCODER (LAION CLIP)
-    # Bu klasör root'ta olmalı
+    # 5. IMAGE ENCODER
     laion_url = "https://huggingface.co/laion/CLIP-ViT-H-14-laion2B-s32B-b79K/resolve/main"
     image_encoder_files = [
         ("image_encoder/config.json", f"{laion_url}/config.json?download=true", 0),
@@ -119,7 +120,7 @@ def load_model():
     ]
     download_folder_files(image_encoder_files)
 
-    # 6. UNET GARM (StabilityAI SDXL)
+    # 6. UNET GARM
     sdxl_url = "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/unet"
     garm_files = [
         ("unet_garm/config.json", f"{sdxl_url}/config.json?download=true", 0),
@@ -127,16 +128,14 @@ def load_model():
     ]
     download_folder_files(garm_files)
 
-    # 7. PARSING & OPENPOSE & DENSEPOSE (Onarım)
+    # 7. PARSING & OPENPOSE & DENSEPOSE
     ensure_file("ckpt/humanparsing/parsing_atr.onnx", f"{base_url}/humanparsing/parsing_atr.onnx?download=true", 200)
     ensure_file("ckpt/humanparsing/parsing_lip.onnx", f"{base_url}/humanparsing/parsing_lip.onnx?download=true", 50)
     ensure_file("ckpt/densepose/densepose_model.pkl", f"{base_url}/densepose/model_final_162be9.pkl?download=true", 50)
     
-    # OpenPose Fix
     target_pose = "ckpt/openpose/ckpts/body_pose_model.pth"
     ensure_file(target_pose, f"{base_url}/openpose/ckpts/body_pose_model.pth?download=true", 150)
     
-    # Preprocess yedeği
     backup_pose = "preprocess/openpose/ckpts/body_pose_model.pth"
     if not os.path.exists(backup_pose):
         os.makedirs(os.path.dirname(backup_pose), exist_ok=True)
@@ -157,9 +156,8 @@ def load_model():
         openpose = OpenPose(0)
     except:
         if os.path.exists(target_pose): os.remove(target_pose)
-        raise RuntimeError("OpenPose yüklenemedi, dosya silindi. Tekrar deneyin.")
+        raise RuntimeError("OpenPose yüklenemedi. Dosya silindi.")
 
-    # Tokenizerları artık yerelden yüklüyoruz (İndirdik çünkü)
     tokenizer = AutoTokenizer.from_pretrained("ckpt/tokenizer")
     tokenizer_2 = AutoTokenizer.from_pretrained("ckpt/tokenizer_2")
     text_encoder = CLIPTextModel.from_pretrained("ckpt/text_encoder", torch_dtype=torch.float16).to(device)
@@ -168,7 +166,14 @@ def load_model():
     image_encoder = CLIPVisionModelWithProjection.from_pretrained("image_encoder", torch_dtype=torch.float16).to(device)
     feature_extractor = CLIPImageProcessor.from_pretrained("image_encoder", torch_dtype=torch.float16)
     
-    unet = UNet2DConditionModel.from_pretrained("ckpt/unet", torch_dtype=torch.float16).to(device)
+    # --- KRİTİK DEĞİŞİKLİK BURADA ---
+    # use_safetensors=False diyerek .bin dosyasına zorluyoruz.
+    unet = UNet2DConditionModel.from_pretrained(
+        "ckpt/unet", 
+        torch_dtype=torch.float16, 
+        use_safetensors=False  # <--- İŞTE BU SATIR KURTARACAK
+    ).to(device)
+
     unet_encoder = UNetGarm.from_pretrained("unet_garm", torch_dtype=torch.float16, use_safetensors=True).to(device)
 
     pipe = StableDiffusionXLInpaintPipeline.from_pretrained(
@@ -189,7 +194,7 @@ def load_model():
 
     model = {"pipe": pipe, "parsing": parsing, "openpose": openpose, "device": device}
     MODEL_LOADED = True
-    print("✅ Sistem Hazır! (v19)")
+    print("✅ Sistem Hazır! (v21 - Bin Forced)")
     return model
 
 # --- HELPER ---
@@ -211,7 +216,7 @@ def smart_resize(img, width, height):
 
 # --- HANDLER ---
 def handler(job):
-    print("🚀 HANDLER ÇALIŞIYOR (v19)")
+    print("🚀 HANDLER ÇALIŞIYOR (v21)")
     data = job["input"]
     
     human = smart_resize(b64_to_img(data["human_image"]), 768, 1024)
