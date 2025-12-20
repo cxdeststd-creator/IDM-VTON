@@ -4,10 +4,15 @@ import base64
 import numpy as np
 import torch
 import shutil
+import sys
 from PIL import Image, ImageOps
 import runpod
 from torchvision import transforms 
 from huggingface_hub import snapshot_download
+
+# --- DİKKAT: BURADA SADECE STANDART KÜTÜPHANELER VAR ---
+# src ve preprocess importlarını aşağıya, fix_bug fonksiyonundan sonraya aldık.
+# Bu sayede önce kodu tamir ediyoruz, sonra tamir edilmiş kodu yüklüyoruz.
 
 from transformers import (
     CLIPImageProcessor, 
@@ -16,17 +21,42 @@ from transformers import (
     CLIPTextModelWithProjection,
     AutoTokenizer
 )
-from preprocess.humanparsing.run_parsing import Parsing
-from preprocess.openpose.run_openpose import OpenPose
-from src.tryon_pipeline import StableDiffusionXLInpaintPipeline
-from src.unet_hacked_tryon import UNet2DConditionModel
-from src.unet_hacked_garmnet import UNet2DConditionModel as UNetGarm
 
 MODEL_LOADED = False
 model = {}
 
+def fix_buggy_code():
+    """
+    IDM-VTON reposundaki 'NoneType' hatasını düzelten cerrah fonksiyon.
+    Dosyayı açar, hatalı satırı bulur, düzeltip kaydeder.
+    """
+    target_file = "src/unet_hacked_garmnet.py"
+    if not os.path.exists(target_file):
+        print(f"⚠️ Uyarı: {target_file} bulunamadı, düzeltme yapılamadı.")
+        return
+
+    print(f"🔧 KOD DÜZELTİLİYOR: {target_file}")
+    with open(target_file, "r") as f:
+        content = f.read()
+
+    # Hatalı satır: if "text_embeds" not in added_cond_kwargs:
+    # Bu satır added_cond_kwargs None ise patlar.
+    
+    old_code = 'if "text_embeds" not in added_cond_kwargs:'
+    
+    # Yeni kod: Önce None mu diye bak, None ise boş sözlük yap.
+    new_code = 'if added_cond_kwargs is None: added_cond_kwargs = {}\n        if "text_embeds" not in added_cond_kwargs:'
+    
+    if old_code in content:
+        content = content.replace(old_code, new_code)
+        with open(target_file, "w") as f:
+            f.write(content)
+        print("✅ KRİTİK HATA DÜZELTİLDİ: added_cond_kwargs check eklendi.")
+    else:
+        print("ℹ️ Kod zaten düzgün veya hedef satır bulunamadı.")
+
 def download_smart():
-    print("⬇️ MODELLER KONTROL EDİLİYOR (SMART MODE)...")
+    print("⬇️ MODELLER KONTROL EDİLİYOR...")
     
     # 1. ANA MODEL
     whitelist = [
@@ -34,7 +64,7 @@ def download_smart():
         "text_encoder/*", "text_encoder_2/*", 
         "vae/*", "unet/*", "scheduler/*",
         "humanparsing/*", "densepose/*", "openpose/*",
-        "*.json", "*.txt" 
+        "*.json", "*.txt", "*.py" 
     ]
     
     snapshot_download(
@@ -76,7 +106,22 @@ def load_model():
     global MODEL_LOADED, model
     if MODEL_LOADED: return model
 
+    # 1. Önce İndir
     download_smart()
+    
+    # 2. Sonra Kodu Tamir Et (IMPORTLARDAN ÖNCE!)
+    fix_buggy_code()
+
+    # 3. Şimdi Importları Yap (Artık dosya düzgün olduğu için import edilebilir)
+    print("🔄 Modüller yükleniyor...")
+    
+    # Bu importlar IDM-VTON klasöründen geliyor, o yüzden fix_buggy_code'dan sonra yapılmalı
+    sys.path.append(os.getcwd()) # Mevcut dizini path'e ekle
+    from preprocess.humanparsing.run_parsing import Parsing
+    from preprocess.openpose.run_openpose import OpenPose
+    from src.tryon_pipeline import StableDiffusionXLInpaintPipeline
+    from src.unet_hacked_tryon import UNet2DConditionModel
+    from src.unet_hacked_garmnet import UNet2DConditionModel as UNetGarm
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"🚀 Modeller Yükleniyor... Device: {device}")
@@ -84,8 +129,7 @@ def load_model():
     parsing = Parsing(0)
     openpose = OpenPose(0)
     
-    # --- İŞTE DÜZELTME BURADA ---
-    # use_fast=False diyerek eski tip tokenizer'ı zorluyoruz.
+    # use_fast=False (Tokenizer hatası için)
     tokenizer = AutoTokenizer.from_pretrained("ckpt", subfolder="tokenizer", use_fast=False)
     tokenizer_2 = AutoTokenizer.from_pretrained("ckpt", subfolder="tokenizer_2", use_fast=False)
     
@@ -118,7 +162,7 @@ def load_model():
 
     model = {"pipe": pipe, "parsing": parsing, "openpose": openpose, "device": device}
     MODEL_LOADED = True
-    print("✅ Sistem Hazır! (v31 - Slow Tokenizer)")
+    print("✅ Sistem Hazır! (v32 - Bug Fixed)")
     return model
 
 # --- HELPER ---
@@ -140,14 +184,16 @@ def smart_resize(img, width, height):
 
 # --- HANDLER ---
 def handler(job):
-    print("🚀 HANDLER ÇALIŞIYOR (v31)")
+    print("🚀 HANDLER ÇALIŞIYOR (v32)")
     data = job["input"]
     try:
+        # Load model fonksiyonunu çağır (Bu fonksiyon bug fix ve importları yapar)
+        mdl = load_model()
+        
         human = smart_resize(b64_to_img(data["human_image"]), 768, 1024)
         garment = smart_resize(b64_to_img(data["garment_image"]), 768, 1024)
         steps = data.get("steps", 30)
         seed = data.get("seed", 42)
-        mdl = load_model()
     except Exception as e:
         import traceback
         return {"error": f"Yükleme/Giriş Hatası: {str(e)}", "trace": traceback.format_exc()}
@@ -172,6 +218,7 @@ def handler(job):
         device = mdl["device"]
         pose_tensor = transforms.ToTensor()(pose).unsqueeze(0).to(device, torch.float16)
         cloth_tensor = transforms.ToTensor()(garment).unsqueeze(0).to(device, torch.float16)
+        
         result = mdl["pipe"](
             prompt="clothes", image=human, mask_image=mask_image, ip_adapter_image=garment, 
             cloth=cloth_tensor, pose_img=pose_tensor, num_inference_steps=steps, guidance_scale=2.0,
