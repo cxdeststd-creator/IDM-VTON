@@ -10,9 +10,7 @@ import runpod
 from torchvision import transforms 
 from huggingface_hub import snapshot_download
 
-# --- DİKKAT: BURADA SADECE STANDART KÜTÜPHANELER VAR ---
-# src ve preprocess importlarını aşağıya, fix_bug fonksiyonundan sonraya aldık.
-# Bu sayede önce kodu tamir ediyoruz, sonra tamir edilmiş kodu yüklüyoruz.
+# Standart kütüphaneler yukarıda, IDM-VTON kütüphaneleri aşağıda yüklenecek.
 
 from transformers import (
     CLIPImageProcessor, 
@@ -27,96 +25,76 @@ model = {}
 
 def fix_buggy_code():
     """
-    IDM-VTON reposundaki 'NoneType' hatasını düzelten cerrah fonksiyon.
-    Dosyayı açar, hatalı satırı bulur, düzeltip kaydeder.
+    Indentation hatası vermeden, tek satırda mantık hatasını çözer.
     """
     target_file = "src/unet_hacked_garmnet.py"
     if not os.path.exists(target_file):
-        print(f"⚠️ Uyarı: {target_file} bulunamadı, düzeltme yapılamadı.")
+        print(f"⚠️ Uyarı: {target_file} bulunamadı.")
         return
 
-    print(f"🔧 KOD DÜZELTİLİYOR: {target_file}")
+    print(f"🔧 KOD DÜZELTİLİYOR (HİZALAMA BOZULMADAN): {target_file}")
     with open(target_file, "r") as f:
-        content = f.read()
+        lines = f.readlines()
 
-    # Hatalı satır: if "text_embeds" not in added_cond_kwargs:
-    # Bu satır added_cond_kwargs None ise patlar.
+    # Dosyayı satır satır oku ve hatalı satırı bulduğunda değiştir
+    new_lines = []
+    fixed = False
     
-    old_code = 'if "text_embeds" not in added_cond_kwargs:'
+    # Aradığımız hatalı kod parçası (boşlukları önemsemeden içeriğe bakacağız)
+    search_str = 'if "text_embeds" not in added_cond_kwargs:'
     
-    # Yeni kod: Önce None mu diye bak, None ise boş sözlük yap.
-    new_code = 'if added_cond_kwargs is None: added_cond_kwargs = {}\n        if "text_embeds" not in added_cond_kwargs:'
-    
-    if old_code in content:
-        content = content.replace(old_code, new_code)
+    for line in lines:
+        if search_str in line and not fixed:
+            # Satırın başındaki boşlukları (indentation) koru!
+            leading_spaces = line[:line.find(search_str)]
+            
+            # Yeni güvenli kod: "None ise VEYA içinde yoksa"
+            new_line = leading_spaces + 'if added_cond_kwargs is None or "text_embeds" not in added_cond_kwargs:\n'
+            
+            new_lines.append(new_line)
+            fixed = True
+            print("✅ Satır değiştirildi (Indentation korundu).")
+        else:
+            new_lines.append(line)
+            
+    if fixed:
         with open(target_file, "w") as f:
-            f.write(content)
-        print("✅ KRİTİK HATA DÜZELTİLDİ: added_cond_kwargs check eklendi.")
+            f.writelines(new_lines)
     else:
-        print("ℹ️ Kod zaten düzgün veya hedef satır bulunamadı.")
+        print("ℹ️ Hedef satır bulunamadı veya zaten düzeltilmiş.")
 
 def download_smart():
     print("⬇️ MODELLER KONTROL EDİLİYOR...")
-    
-    # 1. ANA MODEL
     whitelist = [
-        "tokenizer/*", "tokenizer_2/*", 
-        "text_encoder/*", "text_encoder_2/*", 
-        "vae/*", "unet/*", "scheduler/*",
-        "humanparsing/*", "densepose/*", "openpose/*",
-        "*.json", "*.txt", "*.py" 
+        "tokenizer/*", "tokenizer_2/*", "text_encoder/*", "text_encoder_2/*", 
+        "vae/*", "unet/*", "scheduler/*", "humanparsing/*", "densepose/*", 
+        "openpose/*", "*.json", "*.txt", "*.py" 
     ]
+    snapshot_download(repo_id="yisol/IDM-VTON", local_dir="ckpt", allow_patterns=whitelist, local_dir_use_symlinks=True)
+    snapshot_download(repo_id="laion/CLIP-ViT-H-14-laion2B-s32B-b79K", local_dir="image_encoder", allow_patterns=["*.json", "*.safetensors", "*.txt"], local_dir_use_symlinks=True)
+    snapshot_download(repo_id="stabilityai/stable-diffusion-xl-base-1.0", local_dir="unet_garm", allow_patterns=["unet/*", "*.json"], local_dir_use_symlinks=True)
     
-    snapshot_download(
-        repo_id="yisol/IDM-VTON",
-        local_dir="ckpt",
-        allow_patterns=whitelist, 
-        local_dir_use_symlinks=True
-    )
-    
-    # 2. IMAGE ENCODER
-    snapshot_download(
-        repo_id="laion/CLIP-ViT-H-14-laion2B-s32B-b79K",
-        local_dir="image_encoder",
-        allow_patterns=["*.json", "*.safetensors", "*.txt"],
-        local_dir_use_symlinks=True
-    )
-
-    # 3. UNET GARM
-    snapshot_download(
-        repo_id="stabilityai/stable-diffusion-xl-base-1.0",
-        local_dir="unet_garm",
-        allow_patterns=["unet/*", "*.json"], 
-        local_dir_use_symlinks=True
-    )
-        
-    # 4. OPENPOSE YEDEKLEME
     src_pose = "ckpt/openpose/ckpts/body_pose_model.pth"
     dst_pose = "preprocess/openpose/ckpts/body_pose_model.pth"
     if os.path.islink(src_pose): src_pose = os.path.realpath(src_pose)
-
     if os.path.exists(src_pose) and not os.path.exists(dst_pose):
         os.makedirs(os.path.dirname(dst_pose), exist_ok=True)
         try: shutil.copy(src_pose, dst_pose)
         except: pass
-
     print("✅ Dosyalar hazır.")
 
 def load_model():
     global MODEL_LOADED, model
     if MODEL_LOADED: return model
 
-    # 1. Önce İndir
+    # 1. İndir
     download_smart()
     
-    # 2. Sonra Kodu Tamir Et (IMPORTLARDAN ÖNCE!)
+    # 2. Tamir Et (Indentation bozmadan)
     fix_buggy_code()
 
-    # 3. Şimdi Importları Yap (Artık dosya düzgün olduğu için import edilebilir)
-    print("🔄 Modüller yükleniyor...")
-    
-    # Bu importlar IDM-VTON klasöründen geliyor, o yüzden fix_buggy_code'dan sonra yapılmalı
-    sys.path.append(os.getcwd()) # Mevcut dizini path'e ekle
+    # 3. Yükle (Importlar burada)
+    sys.path.append(os.getcwd())
     from preprocess.humanparsing.run_parsing import Parsing
     from preprocess.openpose.run_openpose import OpenPose
     from src.tryon_pipeline import StableDiffusionXLInpaintPipeline
@@ -129,40 +107,27 @@ def load_model():
     parsing = Parsing(0)
     openpose = OpenPose(0)
     
-    # use_fast=False (Tokenizer hatası için)
     tokenizer = AutoTokenizer.from_pretrained("ckpt", subfolder="tokenizer", use_fast=False)
     tokenizer_2 = AutoTokenizer.from_pretrained("ckpt", subfolder="tokenizer_2", use_fast=False)
-    
     text_encoder = CLIPTextModel.from_pretrained("ckpt", subfolder="text_encoder", torch_dtype=torch.float16).to(device)
     text_encoder_2 = CLIPTextModelWithProjection.from_pretrained("ckpt", subfolder="text_encoder_2", torch_dtype=torch.float16).to(device)
-    
     image_encoder = CLIPVisionModelWithProjection.from_pretrained("image_encoder", torch_dtype=torch.float16).to(device)
     feature_extractor = CLIPImageProcessor.from_pretrained("image_encoder", torch_dtype=torch.float16)
-    
     unet = UNet2DConditionModel.from_pretrained("ckpt", subfolder="unet", torch_dtype=torch.float16).to(device)
     
     garm_path = "unet_garm/unet" if os.path.exists("unet_garm/unet") else "unet_garm"
     unet_encoder = UNetGarm.from_pretrained(garm_path, torch_dtype=torch.float16, use_safetensors=True).to(device)
 
     pipe = StableDiffusionXLInpaintPipeline.from_pretrained(
-        "ckpt", 
-        unet=unet,
-        unet_encoder=unet_encoder,
-        image_encoder=image_encoder,
-        feature_extractor=feature_extractor,
-        text_encoder=text_encoder,
-        text_encoder_2=text_encoder_2,
-        tokenizer=tokenizer,
-        tokenizer_2=tokenizer_2,
-        torch_dtype=torch.float16,
-        use_safetensors=True,
+        "ckpt", unet=unet, unet_encoder=unet_encoder, image_encoder=image_encoder,
+        feature_extractor=feature_extractor, text_encoder=text_encoder, text_encoder_2=text_encoder_2,
+        tokenizer=tokenizer, tokenizer_2=tokenizer_2, torch_dtype=torch.float16, use_safetensors=True,
     ).to(device)
-    
     pipe.register_modules(unet_encoder=unet_encoder)
 
     model = {"pipe": pipe, "parsing": parsing, "openpose": openpose, "device": device}
     MODEL_LOADED = True
-    print("✅ Sistem Hazır! (v32 - Bug Fixed)")
+    print("✅ Sistem Hazır! (v33)")
     return model
 
 # --- HELPER ---
@@ -184,12 +149,10 @@ def smart_resize(img, width, height):
 
 # --- HANDLER ---
 def handler(job):
-    print("🚀 HANDLER ÇALIŞIYOR (v32)")
+    print("🚀 HANDLER ÇALIŞIYOR (v33)")
     data = job["input"]
     try:
-        # Load model fonksiyonunu çağır (Bu fonksiyon bug fix ve importları yapar)
         mdl = load_model()
-        
         human = smart_resize(b64_to_img(data["human_image"]), 768, 1024)
         garment = smart_resize(b64_to_img(data["garment_image"]), 768, 1024)
         steps = data.get("steps", 30)
