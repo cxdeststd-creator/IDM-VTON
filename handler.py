@@ -5,6 +5,7 @@ import numpy as np
 import torch
 import subprocess
 import shutil
+import time
 from PIL import Image, ImageOps
 import runpod
 from torchvision import transforms 
@@ -23,9 +24,9 @@ BASE_PATH = "ckpt"
 # --- EVRENSEL İNDİRİCİ ---
 def ensure_file(local_path, url, min_size_mb=0):
     is_valid = False
-    
     if os.path.exists(local_path):
         size_mb = os.path.getsize(local_path) / (1024 * 1024)
+        # Sadece büyük dosyalar için boyut kontrolü yap (Configler 1KB olabilir, onları silmesin)
         if min_size_mb > 0 and size_mb < min_size_mb:
             print(f"⚠️ DOSYA EKSİK/BOZUK: {local_path} ({size_mb:.2f} MB). Siliniyor...")
             try: os.remove(local_path)
@@ -43,30 +44,51 @@ def ensure_file(local_path, url, min_size_mb=0):
             print(f"❌ İNDİRME HATASI: {e} -> {url}")
             raise e
 
-def download_folder_files(folder_files):
-    print(f"📦 {len(folder_files)} dosya kontrol ediliyor...")
-    for f in folder_files:
-        ensure_file(f[0], f[1], f[2])
-
 def load_model():
     global MODEL_LOADED, model
     if MODEL_LOADED: return model
 
-    print("🔧 SİSTEM KONTROLÜ (v23 - GitHub JSON Entegrasyonu)...")
+    print("🔧 SİSTEM FULL CONFIG TARAMASI (v24)...")
     base_url = "https://huggingface.co/yisol/IDM-VTON/resolve/main"
 
-    # NOT: model_index.json'ı indirme satırını sildim, çünkü artık senin GitHub reponda var!
+    # ==========================================
+    # 1. KÜÇÜK CONFIG DOSYALARI (EKSİKSİZ LİSTE)
+    # ==========================================
+    # Hata veren tokenizer_config.json dahil HEPSİ burada.
     
-    # 1. TOKENIZER (Configler repoda olsa da eksik varsa indirsin)
-    tokenizer_files = [
-        ("ckpt/tokenizer/vocab.json", f"{base_url}/tokenizer/vocab.json?download=true", 0),
-        ("ckpt/tokenizer/merges.txt", f"{base_url}/tokenizer/merges.txt?download=true", 0),
-        ("ckpt/tokenizer_2/vocab.json", f"{base_url}/tokenizer_2/vocab.json?download=true", 0),
-        ("ckpt/tokenizer_2/merges.txt", f"{base_url}/tokenizer_2/merges.txt?download=true", 0),
-    ]
-    download_folder_files(tokenizer_files)
+    config_files = [
+        # TOKENIZER 1
+        ("ckpt/tokenizer/tokenizer_config.json", f"{base_url}/tokenizer/tokenizer_config.json?download=true"),
+        ("ckpt/tokenizer/special_tokens_map.json", f"{base_url}/tokenizer/special_tokens_map.json?download=true"),
+        ("ckpt/tokenizer/vocab.json", f"{base_url}/tokenizer/vocab.json?download=true"),
+        ("ckpt/tokenizer/merges.txt", f"{base_url}/tokenizer/merges.txt?download=true"),
 
-    # 2. BÜYÜK MODELLER (GitHub'a atılamayanlar)
+        # TOKENIZER 2
+        ("ckpt/tokenizer_2/tokenizer_config.json", f"{base_url}/tokenizer_2/tokenizer_config.json?download=true"),
+        ("ckpt/tokenizer_2/special_tokens_map.json", f"{base_url}/tokenizer_2/special_tokens_map.json?download=true"),
+        ("ckpt/tokenizer_2/vocab.json", f"{base_url}/tokenizer_2/vocab.json?download=true"),
+        ("ckpt/tokenizer_2/merges.txt", f"{base_url}/tokenizer_2/merges.txt?download=true"),
+
+        # TEXT ENCODER 1 & 2 CONFIGS
+        ("ckpt/text_encoder/config.json", f"{base_url}/text_encoder/config.json?download=true"),
+        ("ckpt/text_encoder_2/config.json", f"{base_url}/text_encoder_2/config.json?download=true"),
+
+        # VAE & SCHEDULER CONFIGS
+        ("ckpt/vae/config.json", f"{base_url}/vae/config.json?download=true"),
+        ("ckpt/scheduler/scheduler_config.json", f"{base_url}/scheduler/scheduler_config.json?download=true"),
+
+        # UNET CONFIG
+        ("ckpt/unet/config.json", f"{base_url}/unet/config.json?download=true"),
+    ]
+
+    print(f"📦 {len(config_files)} adet Config dosyası kontrol ediliyor...")
+    for local, url in config_files:
+        ensure_file(local, url, 0) # 0 MB limit, çünkü bunlar küçük dosyalar
+
+
+    # ==========================================
+    # 2. BÜYÜK MODELLER (AĞIR ABİLER)
+    # ==========================================
     
     # Text Encoders
     ensure_file("ckpt/text_encoder/model.safetensors", f"{base_url}/text_encoder/model.safetensors?download=true", 200)
@@ -80,14 +102,18 @@ def load_model():
         print("🧹 Bozuk safetensors temizleniyor...")
         os.remove("ckpt/unet/diffusion_pytorch_model.safetensors")
     
-    # UNET .bin indir
+    # UNET .bin indir (1GB altıysa bozuktur)
     ensure_file("ckpt/unet/diffusion_pytorch_model.bin", f"{base_url}/unet/diffusion_pytorch_model.bin?download=true", 1000)
 
-    # Image Encoder & GARM
+    # Image Encoder (LAION)
     laion_url = "https://huggingface.co/laion/CLIP-ViT-H-14-laion2B-s32B-b79K/resolve/main"
+    ensure_file("image_encoder/config.json", f"{laion_url}/config.json?download=true", 0)
+    ensure_file("image_encoder/preprocessor_config.json", f"{laion_url}/preprocessor_config.json?download=true", 0)
     ensure_file("image_encoder/model.safetensors", f"{laion_url}/model.safetensors?download=true", 500)
     
+    # UNET GARM (SDXL Base)
     sdxl_url = "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/unet"
+    ensure_file("unet_garm/config.json", f"{sdxl_url}/config.json?download=true", 0)
     ensure_file("unet_garm/diffusion_pytorch_model.safetensors", f"{sdxl_url}/diffusion_pytorch_model.fp16.safetensors?download=true", 1000)
 
     # 3. YAN MODELLER (Parsing, OpenPose, DensePose)
@@ -121,9 +147,10 @@ def load_model():
         if os.path.exists(target_pose): os.remove(target_pose)
         raise RuntimeError("OpenPose yüklenemedi. Dosya silindi. Tekrar deneyin.")
 
-    # HuggingFace kütüphaneleri eksik dosya varsa otomatik indirir (Repo'dan configleri okur)
+    # Tokenizer configleri artık diskte VAR. Hata vermeyecek.
     tokenizer = AutoTokenizer.from_pretrained("ckpt/tokenizer")
     tokenizer_2 = AutoTokenizer.from_pretrained("ckpt/tokenizer_2")
+    
     text_encoder = CLIPTextModel.from_pretrained("ckpt/text_encoder", torch_dtype=torch.float16).to(device)
     text_encoder_2 = CLIPTextModelWithProjection.from_pretrained("ckpt/text_encoder_2", torch_dtype=torch.float16).to(device)
     
@@ -153,7 +180,7 @@ def load_model():
 
     model = {"pipe": pipe, "parsing": parsing, "openpose": openpose, "device": device}
     MODEL_LOADED = True
-    print("✅ Sistem Hazır! (v23)")
+    print("✅ Sistem Hazır! (v24 - ALL CONFIGS)")
     return model
 
 # --- HELPER ---
@@ -175,7 +202,7 @@ def smart_resize(img, width, height):
 
 # --- HANDLER ---
 def handler(job):
-    print("🚀 HANDLER ÇALIŞIYOR (v23)")
+    print("🚀 HANDLER ÇALIŞIYOR (v24)")
     data = job["input"]
     
     human = smart_resize(b64_to_img(data["human_image"]), 768, 1024)
