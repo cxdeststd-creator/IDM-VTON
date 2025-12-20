@@ -25,76 +25,69 @@ from src.unet_hacked_garmnet import UNet2DConditionModel as UNetGarm
 MODEL_LOADED = False
 model = {}
 
-def download_everything():
-    """
-    Cache varsa oradan okur (Symlink), yoksa indirir.
-    SameFileError hatasını çözer.
-    """
-    print("⬇️ MODELLER BAĞLANIYOR (SYMLINK)...")
+def download_smart():
+    print("⬇️ MODELLER KONTROL EDİLİYOR (SMART MODE)...")
     
-    # 1. ANA MODEL (IDM-VTON) -> ckpt klasörüne
-    # local_dir_use_symlinks=True yaptık. Kopyalama hatası vermez, direkt bağlar.
+    # 1. ANA MODEL
+    whitelist = [
+        "tokenizer/*", "tokenizer_2/*", 
+        "text_encoder/*", "text_encoder_2/*", 
+        "vae/*", "unet/*", "scheduler/*",
+        "humanparsing/*", "densepose/*", "openpose/*",
+        "*.json", "*.txt" 
+    ]
+    
     snapshot_download(
         repo_id="yisol/IDM-VTON",
         local_dir="ckpt",
-        local_dir_use_symlinks=True  # <--- İŞTE ÇÖZÜM BURASI
+        allow_patterns=whitelist, 
+        local_dir_use_symlinks=True
     )
     
-    # 2. IMAGE ENCODER (LAION)
+    # 2. IMAGE ENCODER
     snapshot_download(
         repo_id="laion/CLIP-ViT-H-14-laion2B-s32B-b79K",
         local_dir="image_encoder",
+        allow_patterns=["*.json", "*.safetensors", "*.txt"],
         local_dir_use_symlinks=True
     )
 
-    # 3. UNET GARM (SDXL Base)
-    # Sadece UNet kısmını alıyoruz
+    # 3. UNET GARM
     snapshot_download(
         repo_id="stabilityai/stable-diffusion-xl-base-1.0",
         local_dir="unet_garm",
-        allow_patterns=["unet/*"], 
+        allow_patterns=["unet/*", "*.json"], 
         local_dir_use_symlinks=True
     )
         
     # 4. OPENPOSE YEDEKLEME
-    # Burası kopyalama yapmak zorunda çünkü klasör yapısı farklı.
-    # Önce hedefi siliyoruz ki "SameFileError" vermesin.
     src_pose = "ckpt/openpose/ckpts/body_pose_model.pth"
     dst_pose = "preprocess/openpose/ckpts/body_pose_model.pth"
-    
-    # Kaynak gerçek dosya değil de symlink ise onun gerçek yolunu bulalım
-    if os.path.islink(src_pose):
-        src_pose = os.path.realpath(src_pose)
+    if os.path.islink(src_pose): src_pose = os.path.realpath(src_pose)
 
-    if os.path.exists(src_pose):
-        # Eğer hedef zaten varsa ve aynısıysa dokunma
-        if not os.path.exists(dst_pose):
-            print("🔄 OpenPose yedeği alınıyor...")
-            os.makedirs(os.path.dirname(dst_pose), exist_ok=True)
-            try:
-                shutil.copy(src_pose, dst_pose)
-            except shutil.SameFileError:
-                pass # Zaten aynıysa sorun yok devam et
+    if os.path.exists(src_pose) and not os.path.exists(dst_pose):
+        os.makedirs(os.path.dirname(dst_pose), exist_ok=True)
+        try: shutil.copy(src_pose, dst_pose)
+        except: pass
 
-    print("✅ Dosya bağlantıları tamamlandı.")
+    print("✅ Dosyalar hazır.")
 
 def load_model():
     global MODEL_LOADED, model
     if MODEL_LOADED: return model
 
-    # İNDİRME/BAĞLAMA
-    download_everything()
+    download_smart()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"🚀 Modeller YERELDEN (ckpt) Yükleniyor... Device: {device}")
+    print(f"🚀 Modeller Yükleniyor... Device: {device}")
 
     parsing = Parsing(0)
     openpose = OpenPose(0)
-
-    # HuggingFace kütüphanesi symlinkleri otomatik tanır ve açar.
     
-    tokenizer = AutoTokenizer.from_pretrained("ckpt", subfolder="tokenizer")
-    tokenizer_2 = AutoTokenizer.from_pretrained("ckpt", subfolder="tokenizer_2")
+    # --- İŞTE DÜZELTME BURADA ---
+    # use_fast=False diyerek eski tip tokenizer'ı zorluyoruz.
+    tokenizer = AutoTokenizer.from_pretrained("ckpt", subfolder="tokenizer", use_fast=False)
+    tokenizer_2 = AutoTokenizer.from_pretrained("ckpt", subfolder="tokenizer_2", use_fast=False)
     
     text_encoder = CLIPTextModel.from_pretrained("ckpt", subfolder="text_encoder", torch_dtype=torch.float16).to(device)
     text_encoder_2 = CLIPTextModelWithProjection.from_pretrained("ckpt", subfolder="text_encoder_2", torch_dtype=torch.float16).to(device)
@@ -102,14 +95,11 @@ def load_model():
     image_encoder = CLIPVisionModelWithProjection.from_pretrained("image_encoder", torch_dtype=torch.float16).to(device)
     feature_extractor = CLIPImageProcessor.from_pretrained("image_encoder", torch_dtype=torch.float16)
     
-    # UNet'ler
     unet = UNet2DConditionModel.from_pretrained("ckpt", subfolder="unet", torch_dtype=torch.float16).to(device)
     
-    # Garm Unet path kontrolü
     garm_path = "unet_garm/unet" if os.path.exists("unet_garm/unet") else "unet_garm"
     unet_encoder = UNetGarm.from_pretrained(garm_path, torch_dtype=torch.float16, use_safetensors=True).to(device)
 
-    # PIPELINE
     pipe = StableDiffusionXLInpaintPipeline.from_pretrained(
         "ckpt", 
         unet=unet,
@@ -128,7 +118,7 @@ def load_model():
 
     model = {"pipe": pipe, "parsing": parsing, "openpose": openpose, "device": device}
     MODEL_LOADED = True
-    print("✅ Sistem Hazır! (v28 - Symlink Mode)")
+    print("✅ Sistem Hazır! (v31 - Slow Tokenizer)")
     return model
 
 # --- HELPER ---
@@ -150,15 +140,13 @@ def smart_resize(img, width, height):
 
 # --- HANDLER ---
 def handler(job):
-    print("🚀 HANDLER ÇALIŞIYOR (v28)")
+    print("🚀 HANDLER ÇALIŞIYOR (v31)")
     data = job["input"]
-    
     try:
         human = smart_resize(b64_to_img(data["human_image"]), 768, 1024)
         garment = smart_resize(b64_to_img(data["garment_image"]), 768, 1024)
         steps = data.get("steps", 30)
         seed = data.get("seed", 42)
-    
         mdl = load_model()
     except Exception as e:
         import traceback
@@ -173,29 +161,22 @@ def handler(job):
             mask_image = Image.fromarray((mask_arr * 255).astype(np.uint8))
         except:
             mask_image = Image.new("L", human.size, 0)
-
         human_cv = np.array(human)[:, :, ::-1].copy() 
         pose = None
         try:
             raw = mdl["openpose"](human_cv)
-            if isinstance(raw, dict) and "pose_img" in raw:
-                pose = raw["pose_img"]
-            elif isinstance(raw, Image.Image):
-                pose = raw
+            if isinstance(raw, dict) and "pose_img" in raw: pose = raw["pose_img"]
+            elif isinstance(raw, Image.Image): pose = raw
         except: pass
-            
         if pose is None: pose = Image.new("RGB", human.size, (0,0,0))
-        
         device = mdl["device"]
         pose_tensor = transforms.ToTensor()(pose).unsqueeze(0).to(device, torch.float16)
         cloth_tensor = transforms.ToTensor()(garment).unsqueeze(0).to(device, torch.float16)
-        
         result = mdl["pipe"](
             prompt="clothes", image=human, mask_image=mask_image, ip_adapter_image=garment, 
             cloth=cloth_tensor, pose_img=pose_tensor, num_inference_steps=steps, guidance_scale=2.0,
             generator=torch.Generator(device).manual_seed(seed), height=1024, width=768
         ).images[0]
-
     return {"output": img_to_b64(result)}
 
 runpod.serverless.start({"handler": handler})
