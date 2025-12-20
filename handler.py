@@ -1,8 +1,12 @@
+# --- VERSION: V16_FORCE_UPDATE_FIX --- 
+# (Bu satırı silme, Docker'ın dosyanın değiştiğini anlamasını sağlar)
+
 import os
 import io
 import base64
 import numpy as np
 import torch
+import subprocess
 from PIL import Image, ImageOps
 import runpod
 from torchvision import transforms 
@@ -16,17 +20,70 @@ from transformers import (
 
 MODEL_LOADED = False
 model = {}
-# BASE_REPO artık "ckpt" çünkü her şey yerelde
 BASE_PATH = "ckpt"
+
+# --- TAMİRCİ FONKSİYON ---
+def check_and_fix_model(local_path, url, min_size_mb=100):
+    """
+    Dosya yoksa veya bozuksa (Git LFS pointer) siler ve CURL ile indirir.
+    """
+    needs_download = False
+    
+    if os.path.exists(local_path):
+        # Dosya boyutunu kontrol et (MB cinsinden)
+        size_mb = os.path.getsize(local_path) / (1024 * 1024)
+        if size_mb < min_size_mb:
+            print(f"⚠️ BOZUK DOSYA TESPİT EDİLDİ: {local_path} ({size_mb:.2f} MB)")
+            print("🗑️ Siliniyor...")
+            try:
+                os.remove(local_path)
+            except:
+                pass
+            needs_download = True
+        else:
+            print(f"✅ Dosya Sağlam: {local_path} ({size_mb:.2f} MB)")
+    else:
+        print(f"🔍 Dosya Yok: {local_path}")
+        needs_download = True
+
+    if needs_download:
+        print(f"⬇️ İNDİRİLİYOR (CURL): {local_path}")
+        # Klasörü oluştur
+        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+        try:
+            # CURL komutu ile zorla indir
+            subprocess.run(["curl", "-L", "-o", local_path, url], check=True)
+            print(f"🎉 İndirme Tamamlandı: {local_path}")
+        except Exception as e:
+            print(f"❌ İNDİRME HATASI: {e}")
+            raise e
 
 def load_model():
     global MODEL_LOADED, model
     if MODEL_LOADED: return model
 
-    # ÖN KONTROL: Builder işini yapmış mı?
-    parsing_path = "ckpt/humanparsing/parsing_atr.onnx"
-    if not os.path.exists(parsing_path) or os.path.getsize(parsing_path) < 10 * 1024 * 1024:
-        raise RuntimeError(f"🚨 KRİTİK HATA: {parsing_path} bulunamadı veya boyutu küçük! Lütfen BUILD loglarını kontrol et.")
+    print("🔧 SİSTEM KONTROLÜ VE ONARIMI BAŞLIYOR...")
+
+    # 1. PARSING ATR (250MB+) - Kesinlikle kontrol et
+    check_and_fix_model(
+        "ckpt/humanparsing/parsing_atr.onnx",
+        "https://huggingface.co/yisol/IDM-VTON/resolve/main/humanparsing/parsing_atr.onnx?download=true",
+        min_size_mb=200 
+    )
+
+    # 2. PARSING LIP (Bu da büyük)
+    check_and_fix_model(
+        "ckpt/humanparsing/parsing_lip.onnx",
+        "https://huggingface.co/yisol/IDM-VTON/resolve/main/humanparsing/parsing_lip.onnx?download=true",
+        min_size_mb=50
+    )
+
+    # 3. DENSEPOSE
+    check_and_fix_model(
+        "ckpt/densepose/densepose_model.pkl",
+        "https://huggingface.co/yisol/IDM-VTON/resolve/main/densepose/model_final_162be9.pkl?download=true",
+        min_size_mb=50
+    )
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"🔄 Modeller YERELDEN yükleniyor... Device: {device}")
@@ -37,27 +94,23 @@ def load_model():
     from src.unet_hacked_tryon import UNet2DConditionModel
     from src.unet_hacked_garmnet import UNet2DConditionModel as UNetGarm
 
-    # Artık dosya kesin var ve sağlam
     parsing = Parsing(0)
     openpose = OpenPose(0)
 
-    # 1. Metin İşleyiciler (Text Encoders)
+    # Modülleri yükle
     tokenizer = AutoTokenizer.from_pretrained("ckpt/tokenizer")
     tokenizer_2 = AutoTokenizer.from_pretrained("ckpt/tokenizer_2")
     text_encoder = CLIPTextModel.from_pretrained("ckpt/text_encoder", torch_dtype=torch.float16).to(device)
     text_encoder_2 = CLIPTextModelWithProjection.from_pretrained("ckpt/text_encoder_2", torch_dtype=torch.float16).to(device)
 
-    # 2. Görüntü İşleyiciler
     image_encoder = CLIPVisionModelWithProjection.from_pretrained("image_encoder", torch_dtype=torch.float16).to(device)
     feature_extractor = CLIPImageProcessor.from_pretrained("image_encoder", torch_dtype=torch.float16)
     
-    # 3. UNetler
     unet = UNet2DConditionModel.from_pretrained("ckpt/unet", torch_dtype=torch.float16).to(device)
     unet_encoder = UNetGarm.from_pretrained("unet_garm", torch_dtype=torch.float16, use_safetensors=True).to(device)
 
-    # 4. Pipeline Kurulumu
     pipe = StableDiffusionXLInpaintPipeline.from_pretrained(
-        BASE_PATH, # ckpt klasörü
+        BASE_PATH, 
         unet=unet,
         unet_encoder=unet_encoder,
         image_encoder=image_encoder,
@@ -74,7 +127,7 @@ def load_model():
 
     model = {"pipe": pipe, "parsing": parsing, "openpose": openpose, "device": device}
     MODEL_LOADED = True
-    print("✅ Sistem Hazır! (Full Local Load)")
+    print("✅ Sistem Hazır! (Auto-Repair v16 Active)")
     return model
 
 # --- HELPER ---
@@ -96,7 +149,7 @@ def smart_resize(img, width, height):
 
 # --- HANDLER ---
 def handler(job):
-    print("🚀 HANDLER ÇALIŞIYOR")
+    print("🚀 HANDLER ÇALIŞIYOR (v16)")
     data = job["input"]
     
     human = smart_resize(b64_to_img(data["human_image"]), 768, 1024)
@@ -108,7 +161,8 @@ def handler(job):
     try:
         mdl = load_model()
     except Exception as e:
-        return {"error": f"Model yükleme hatası: {str(e)}"}
+        import traceback
+        return {"error": f"Yükleme Hatası: {str(e)}", "trace": traceback.format_exc()}
 
     with torch.no_grad():
         # 1. PARSING
@@ -136,14 +190,13 @@ def handler(job):
         if pose is None:
             pose = Image.new("RGB", human.size, (0,0,0))
         
-        # 3. PIPELINE GİRİŞLERİ
+        # 3. PIPELINE
         device = mdl["device"]
         dtype = torch.float16
         
         pose_tensor = transforms.ToTensor()(pose).unsqueeze(0).to(device, dtype=dtype)
         cloth_tensor = transforms.ToTensor()(garment).unsqueeze(0).to(device, dtype=dtype)
         
-        # 4. RUN
         result = mdl["pipe"](
             prompt="clothes",
             image=human,
