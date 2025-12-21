@@ -25,68 +25,64 @@ model = {}
 
 def fix_unet_bugs():
     """
-    Nihai UNet Tamircisi.
-    Hedef: Modelin içine giren her şeyi zorla 2048 boyutuna getirmek.
+    Syntax hatası (IndentationError) olmadan,
+    Hem boyut (2048) hem de eksik veri (text_embeds) sorununu çözen final yama.
     """
     target_file = "src/unet_hacked_garmnet.py"
     if not os.path.exists(target_file):
         print(f"⚠️ Uyarı: {target_file} bulunamadı.")
         return
 
-    print(f"🔧 UNET AMELİYATI (v41 - ULTIMATE 2048): {target_file}")
+    print(f"🔧 UNET AMELİYATI (v42 - FINAL): {target_file}")
     with open(target_file, "r") as f:
         lines = f.readlines()
 
     new_lines = []
     fixed = False
     
-    # Referans alacağımız satır (Bunun hemen öncesine kod enjekte edeceğiz)
+    # Bu satırı bulunca, hemen ÖNCESİNE gerekli verileri enjekte edeceğiz.
     search_text = 'if "text_embeds" not in added_cond_kwargs:'
     
     for line in lines:
-        if search_text in line:
-            indent = line.split('if')[0] # Girinti (indentation) kopyala
+        if search_text in line and not fixed:
+            indent = line.split('if')[0] # Mevcut boşluğu kopyala (Hata olmasın diye)
             
-            print("⚡ 2048 Boyut Zorlaması Enjekte Ediliyor...")
+            print("⚡ Veri Enjeksiyonu Yapılıyor (Indentation Korumalı)...")
             
-            # 1. ENCODER HIDDEN STATES PADDING (Ne gelirse gelsin 2048 yap)
-            new_lines.append(f'{indent}# v41 FIX: FORCE 2048 DIMENSION\n')
-            new_lines.append(f'{indent}if encoder_hidden_states is not None:\n')
-            new_lines.append(f'{indent}    current_dim = encoder_hidden_states.shape[-1]\n')
-            new_lines.append(f'{indent}    if current_dim != 2048:\n')
-            new_lines.append(f'{indent}        pad_amt = 2048 - current_dim\n')
-            new_lines.append(f'{indent}        if pad_amt > 0:\n')
-            new_lines.append(f'{indent}            encoder_hidden_states = torch.nn.functional.pad(encoder_hidden_states, (0, pad_amt))\n')
-            
-            # 2. KUTU KONTROLÜ
+            # 1. KUTU KONTROLÜ (None ise yarat)
             new_lines.append(f'{indent}if added_cond_kwargs is None: added_cond_kwargs = {{}}\n')
+
+            # 2. ENCODER PADDING (Kıyafet verisini 2048'e tamamla)
+            # Bu kısım "mat1 and mat2" hatasını çözer.
+            new_lines.append(f'{indent}if encoder_hidden_states is not None:\n')
+            new_lines.append(f'{indent}    if encoder_hidden_states.shape[-1] != 2048:\n')
+            new_lines.append(f'{indent}        pad = 2048 - encoder_hidden_states.shape[-1]\n')
+            new_lines.append(f'{indent}        if pad > 0:\n')
+            new_lines.append(f'{indent}            encoder_hidden_states = torch.nn.functional.pad(encoder_hidden_states, (0, pad))\n')
             
-            # 3. TEXT EMBEDS YARATMA (ARTIK 2048 BOYUTUNDA!)
-            # Hata burada 1280 kalmıştı, onu 2048 yaptık.
+            # 3. TEXT EMBEDS (SDXL için 1280 boyutu standarttır, 0 ile dolduruyoruz)
             new_lines.append(f'{indent}if "text_embeds" not in added_cond_kwargs:\n')
-            new_lines.append(f'{indent}    added_cond_kwargs["text_embeds"] = torch.zeros((1, 2048), device=sample.device, dtype=sample.dtype)\n')
+            new_lines.append(f'{indent}    added_cond_kwargs["text_embeds"] = torch.zeros((1, 1280), device=sample.device, dtype=sample.dtype)\n')
             
-            # 4. TIME IDS (Burası zaten çalışıyordu ama yine ekleyelim)
+            # 4. TIME IDS (6 boyutlu koordinat verisi)
             new_lines.append(f'{indent}if "time_ids" not in added_cond_kwargs:\n')
             new_lines.append(f'{indent}    added_cond_kwargs["time_ids"] = torch.zeros((1, 6), device=sample.device, dtype=sample.dtype)\n')
             
-            # 5. ORİJİNAL HATA KONTROLLERİNİ İPTAL ET
-            new_lines.append(f'{indent}if False: # ESKİ KODLARI SUSTUR\n')
+            # NOT: Orijinal satırı (line) aşağıda aynen yazdırıyoruz.
+            # Biz zaten "added_cond_kwargs" içini doldurduğumuz için,
+            # Orijinal satırdaki "if not in" kontrolü FALSE dönecek ve hata vermeyecek.
+            # "if False" kullanmadığımız için indentation hatası da olmayacak.
             
             fixed = True
-        
-        # search_text'i içeren satırı (veya time_ids hatasını) artık yazmıyoruz çünkü yukarıda hallettik
-        # Ama dosya akışını bozmamak için diğer satırları aynen geçiriyoruz.
-        # Sadece "if False" diyerek o bloğu iptal ettiğimiz için altındakiler çalışmayacak.
         
         new_lines.append(line)
             
     if fixed:
         with open(target_file, "w") as f:
             f.writelines(new_lines)
-        print("✅ UNet başarıyla 2048 boyutuna ayarlandı.")
+        print("✅ UNet Fixlendi: Syntax hatasız enjeksiyon tamam.")
     else:
-        print("ℹ️ Hedef satır bulunamadı (Dosya daha önce değiştirilmiş olabilir).")
+        print("ℹ️ Hedef satır bulunamadı.")
 
 def download_smart():
     print("⬇️ MODELLER KONTROL EDİLİYOR...")
@@ -113,7 +109,7 @@ def load_model():
     if MODEL_LOADED: return model
 
     download_smart()
-    fix_unet_bugs() # <--- AMELİYAT BURADA
+    fix_unet_bugs() # <--- AMELİYAT
 
     sys.path.append(os.getcwd())
     from preprocess.humanparsing.run_parsing import Parsing
@@ -148,7 +144,7 @@ def load_model():
 
     model = {"pipe": pipe, "parsing": parsing, "openpose": openpose, "device": device}
     MODEL_LOADED = True
-    print("✅ Sistem Hazır! (v41)")
+    print("✅ Sistem Hazır! (v42)")
     return model
 
 # --- HELPER ---
@@ -170,7 +166,7 @@ def smart_resize(img, width, height):
 
 # --- HANDLER ---
 def handler(job):
-    print("🚀 HANDLER ÇALIŞIYOR (v41)")
+    print("🚀 HANDLER ÇALIŞIYOR (v42)")
     data = job["input"]
     try:
         mdl = load_model()
