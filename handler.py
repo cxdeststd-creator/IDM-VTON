@@ -10,51 +10,30 @@ import runpod
 from torchvision import transforms 
 from huggingface_hub import snapshot_download
 
-# --- GLOBAL IMPORTLAR (Garanti olsun diye buraya koyuyoruz) ---
-try:
-    from transformers import (
-        CLIPImageProcessor, 
-        CLIPVisionModelWithProjection,
-        CLIPTextModel,
-        CLIPTextModelWithProjection,
-        AutoTokenizer
-    )
-except ImportError:
-    pass # Eğer burada hata verirse fonksiyon içinde tekrar deneyeceğiz
-
-MODEL_LOADED = False
-model = {}
-
-def fix_code_on_disk():
+# --- ADIM 1: DİSKTEKİ DOSYAYI DÜZELTME FONKSİYONU ---
+def fix_buggy_code():
     """
-    HASSAS AYAR (v44 Mantığı Korunuyor):
-    1. Encoder Hidden States (Kıyafet) -> 2048'e tamamla.
-    2. Text Embeds (Yazı) -> 1280 olarak yarat (Modelin istediği bu).
+    v44 Mantığı: Encoder->2048, Text->1280.
+    Bu fonksiyonu importlardan ÖNCE çalıştıracağız.
     """
     target_file = "src/unet_hacked_garmnet.py"
     if not os.path.exists(target_file):
-        print(f"⚠️ Uyarı: {target_file} bulunamadı.")
         return
 
-    print(f"🔧 DİSK ÜZERİNDE TAMİR BAŞLIYOR (v45): {target_file}")
+    print(f"🔧 [v46] DOSYA TAMİR EDİLİYOR: {target_file}")
     with open(target_file, "r") as f:
         lines = f.readlines()
 
     new_lines = []
     fixed = False
-    
-    # Referans satır
     search_text = 'if "text_embeds" not in added_cond_kwargs:'
     
     for line in lines:
         if search_text in line and not fixed:
             indent = line.split('if')[0]
-            
-            print("⚡ KOD ENJEKTE EDİLİYOR (Encoder=2048, Text=1280)...")
-            
-            # 1. Added Cond Kwargs Koruması
+            # 1. Kutu Kontrolü
             new_lines.append(f'{indent}if added_cond_kwargs is None: added_cond_kwargs = {{}}\n')
-
+            
             # 2. ENCODER PADDING (2048 Zorunlu)
             new_lines.append(f'{indent}if encoder_hidden_states is not None:\n')
             new_lines.append(f'{indent}    if encoder_hidden_states.shape[-1] != 2048:\n')
@@ -62,71 +41,73 @@ def fix_code_on_disk():
             new_lines.append(f'{indent}        if pad > 0:\n')
             new_lines.append(f'{indent}            encoder_hidden_states = torch.nn.functional.pad(encoder_hidden_states, (0, pad))\n')
 
-            # 3. TEXT EMBEDS (1280 Zorunlu - Projection Layer için)
+            # 3. TEXT EMBEDS (1280 Zorunlu)
             new_lines.append(f'{indent}if "text_embeds" not in added_cond_kwargs:\n')
             new_lines.append(f'{indent}    added_cond_kwargs["text_embeds"] = torch.zeros((1, 1280), device=sample.device, dtype=sample.dtype)\n')
             
-            # 4. Time IDs
+            # 4. TIME IDS
             new_lines.append(f'{indent}if "time_ids" not in added_cond_kwargs:\n')
             new_lines.append(f'{indent}    added_cond_kwargs["time_ids"] = torch.zeros((1, 6), device=sample.device, dtype=sample.dtype)\n')
             
             fixed = True
-        
         new_lines.append(line)
             
     if fixed:
         with open(target_file, "w") as f:
             f.writelines(new_lines)
-        print("✅ Dosya başarıyla güncellendi.")
-    else:
-        print("ℹ️ Dosya zaten güncel veya hedef satır bulunamadı.")
+        print("✅ Dosya diskte güncellendi.")
 
-def download_smart():
-    print("⬇️ MODELLER KONTROL EDİLİYOR...")
-    whitelist = [
-        "tokenizer/*", "tokenizer_2/*", "text_encoder/*", "text_encoder_2/*", 
-        "vae/*", "unet/*", "scheduler/*", "humanparsing/*", "densepose/*", 
-        "openpose/*", "*.json", "*.txt", "*.py" 
-    ]
-    snapshot_download(repo_id="yisol/IDM-VTON", local_dir="ckpt", allow_patterns=whitelist, local_dir_use_symlinks=True)
+# --- ADIM 2: İNDİR VE HEMEN TAMİR ET ---
+print("⬇️ MODELLER KONTROL EDİLİYOR...")
+snapshot_download(repo_id="yisol/IDM-VTON", local_dir="ckpt", allow_patterns=["*.py", "*.json", "unet/*"], local_dir_use_symlinks=True)
+# Diğer indirmeler model yüklenirken yapılır, ama script dosyaları için burası şart.
+
+# TAMİRİ ÇALIŞTIR
+fix_buggy_code()
+
+# --- ADIM 3: HAFIZAYI TEMİZLE VE IMPORT ET ---
+sys.path.append(os.getcwd())
+
+# Eğer Python hafızasında eski bozuk dosya kaldıysa SİLİYORUZ.
+modules_to_clear = [m for m in sys.modules if "unet_hacked_garmnet" in m]
+for m in modules_to_clear:
+    del sys.modules[m]
+    print(f"🧹 Eski modül hafızadan silindi: {m}")
+
+# ŞİMDİ TEMİZ IMPORT
+from transformers import (
+    CLIPImageProcessor, 
+    CLIPVisionModelWithProjection,
+    CLIPTextModel,
+    CLIPTextModelWithProjection,
+    AutoTokenizer
+)
+from preprocess.humanparsing.run_parsing import Parsing
+from preprocess.openpose.run_openpose import OpenPose
+from src.tryon_pipeline import StableDiffusionXLInpaintPipeline
+from src.unet_hacked_tryon import UNet2DConditionModel
+from src.unet_hacked_garmnet import UNet2DConditionModel as UNetGarm
+
+MODEL_LOADED = False
+model = {}
+
+def download_extra_models():
+    snapshot_download(repo_id="yisol/IDM-VTON", local_dir="ckpt", allow_patterns=["tokenizer/*", "text_encoder/*", "vae/*", "scheduler/*", "humanparsing/*", "densepose/*", "openpose/*"], local_dir_use_symlinks=True)
     snapshot_download(repo_id="laion/CLIP-ViT-H-14-laion2B-s32B-b79K", local_dir="image_encoder", allow_patterns=["*.json", "*.safetensors", "*.txt"], local_dir_use_symlinks=True)
     snapshot_download(repo_id="stabilityai/stable-diffusion-xl-base-1.0", local_dir="unet_garm", allow_patterns=["unet/*", "*.json"], local_dir_use_symlinks=True)
     
     src_pose = "ckpt/openpose/ckpts/body_pose_model.pth"
     dst_pose = "preprocess/openpose/ckpts/body_pose_model.pth"
-    if os.path.islink(src_pose): src_pose = os.path.realpath(src_pose)
     if os.path.exists(src_pose) and not os.path.exists(dst_pose):
         os.makedirs(os.path.dirname(dst_pose), exist_ok=True)
         try: shutil.copy(src_pose, dst_pose)
         except: pass
-    print("✅ Dosyalar hazır.")
 
 def load_model():
     global MODEL_LOADED, model
     if MODEL_LOADED: return model
 
-    download_smart()
-    
-    # --- KRİTİK ADIM: KODU DÜZELT ---
-    fix_code_on_disk()
-
-    # --- KRİTİK ADIM: IMPORTLAR ---
-    # Python hafızasında eski modüller kalmasın diye burada importluyoruz.
-    # AutoTokenizer'ı da buraya ekliyoruz ki kesin çalışsın.
-    from transformers import (
-        CLIPImageProcessor, 
-        CLIPVisionModelWithProjection,
-        CLIPTextModel,
-        CLIPTextModelWithProjection,
-        AutoTokenizer
-    )
-    
-    sys.path.append(os.getcwd())
-    from preprocess.humanparsing.run_parsing import Parsing
-    from preprocess.openpose.run_openpose import OpenPose
-    from src.tryon_pipeline import StableDiffusionXLInpaintPipeline
-    from src.unet_hacked_tryon import UNet2DConditionModel
-    from src.unet_hacked_garmnet import UNet2DConditionModel as UNetGarm
+    download_extra_models()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"🚀 Modeller Yükleniyor... Device: {device}")
@@ -154,7 +135,7 @@ def load_model():
 
     model = {"pipe": pipe, "parsing": parsing, "openpose": openpose, "device": device}
     MODEL_LOADED = True
-    print("✅ Sistem Hazır! (v45)")
+    print("✅ Sistem Hazır! (v46)")
     return model
 
 # --- HELPER ---
@@ -176,7 +157,7 @@ def smart_resize(img, width, height):
 
 # --- HANDLER ---
 def handler(job):
-    print("🚀 HANDLER ÇALIŞIYOR (v45)")
+    print("🚀 HANDLER ÇALIŞIYOR (v46)")
     data = job["input"]
     try:
         mdl = load_model()
@@ -208,3 +189,12 @@ def handler(job):
         device = mdl["device"]
         pose_tensor = transforms.ToTensor()(pose).unsqueeze(0).to(device, torch.float16)
         cloth_tensor = transforms.ToTensor()(garment).unsqueeze(0).to(device, torch.float16)
+        
+        result = mdl["pipe"](
+            prompt="clothes", image=human, mask_image=mask_image, ip_adapter_image=garment, 
+            cloth=cloth_tensor, pose_img=pose_tensor, num_inference_steps=steps, guidance_scale=2.0,
+            generator=torch.Generator(device).manual_seed(seed), height=1024, width=768
+        ).images[0]
+    return {"output": img_to_b64(result)}
+
+runpod.serverless.start({"handler": handler})
