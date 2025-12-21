@@ -10,7 +10,7 @@ import runpod
 from torchvision import transforms 
 from huggingface_hub import snapshot_download
 
-# Standartlar yukarıda. Model importları fix_buggy_code'dan sonraya.
+# Standartlar yukarıda. Model importları fix_buggy_code'dan sonraya
 
 from transformers import (
     CLIPImageProcessor, 
