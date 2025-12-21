@@ -10,50 +10,59 @@ import runpod
 from torchvision import transforms 
 from huggingface_hub import snapshot_download
 
-# --- IMPORTLARI YİNE AŞAĞIDA YAPIYORUZ ---
+# --- GLOBAL IMPORTLAR (Garanti olsun diye buraya koyuyoruz) ---
+try:
+    from transformers import (
+        CLIPImageProcessor, 
+        CLIPVisionModelWithProjection,
+        CLIPTextModel,
+        CLIPTextModelWithProjection,
+        AutoTokenizer
+    )
+except ImportError:
+    pass # Eğer burada hata verirse fonksiyon içinde tekrar deneyeceğiz
 
 MODEL_LOADED = False
 model = {}
 
 def fix_code_on_disk():
     """
-    HASSAS AYAR (v44):
-    1. Encoder Hidden States -> 2048'e tamamla (Cross Attention için).
-    2. Text Embeds -> 1280 olarak yarat (Add Embedding Projection için).
+    HASSAS AYAR (v44 Mantığı Korunuyor):
+    1. Encoder Hidden States (Kıyafet) -> 2048'e tamamla.
+    2. Text Embeds (Yazı) -> 1280 olarak yarat (Modelin istediği bu).
     """
     target_file = "src/unet_hacked_garmnet.py"
     if not os.path.exists(target_file):
         print(f"⚠️ Uyarı: {target_file} bulunamadı.")
         return
 
-    print(f"🔧 DİSK ÜZERİNDE TAMİR BAŞLIYOR (v44): {target_file}")
+    print(f"🔧 DİSK ÜZERİNDE TAMİR BAŞLIYOR (v45): {target_file}")
     with open(target_file, "r") as f:
         lines = f.readlines()
 
     new_lines = []
     fixed = False
     
-    # Hata veren satırı bul
+    # Referans satır
     search_text = 'if "text_embeds" not in added_cond_kwargs:'
     
     for line in lines:
         if search_text in line and not fixed:
-            indent = line.split('if')[0] # Girinti kopyala
+            indent = line.split('if')[0]
             
             print("⚡ KOD ENJEKTE EDİLİYOR (Encoder=2048, Text=1280)...")
             
             # 1. Added Cond Kwargs Koruması
             new_lines.append(f'{indent}if added_cond_kwargs is None: added_cond_kwargs = {{}}\n')
 
-            # 2. ENCODER PADDING (Burası 2048 OLMALI - Doğruydu, dokunmuyoruz)
+            # 2. ENCODER PADDING (2048 Zorunlu)
             new_lines.append(f'{indent}if encoder_hidden_states is not None:\n')
             new_lines.append(f'{indent}    if encoder_hidden_states.shape[-1] != 2048:\n')
             new_lines.append(f'{indent}        pad = 2048 - encoder_hidden_states.shape[-1]\n')
             new_lines.append(f'{indent}        if pad > 0:\n')
             new_lines.append(f'{indent}            encoder_hidden_states = torch.nn.functional.pad(encoder_hidden_states, (0, pad))\n')
 
-            # 3. TEXT EMBEDS (Burası 1280 OLMALI - İşte Düzeltme Burada!)
-            # v43'te burayı 2048 yapmıştık, hata oradaydı. Şimdi 1280'e çekiyoruz.
+            # 3. TEXT EMBEDS (1280 Zorunlu - Projection Layer için)
             new_lines.append(f'{indent}if "text_embeds" not in added_cond_kwargs:\n')
             new_lines.append(f'{indent}    added_cond_kwargs["text_embeds"] = torch.zeros((1, 1280), device=sample.device, dtype=sample.dtype)\n')
             
@@ -68,7 +77,7 @@ def fix_code_on_disk():
     if fixed:
         with open(target_file, "w") as f:
             f.writelines(new_lines)
-        print("✅ Dosya başarıyla güncellendi (Precision Mode).")
+        print("✅ Dosya başarıyla güncellendi.")
     else:
         print("ℹ️ Dosya zaten güncel veya hedef satır bulunamadı.")
 
@@ -97,9 +106,21 @@ def load_model():
     if MODEL_LOADED: return model
 
     download_smart()
-    fix_code_on_disk() # <--- Hassas Ameliyat
+    
+    # --- KRİTİK ADIM: KODU DÜZELT ---
+    fix_code_on_disk()
 
-    # IMPORTLAR BURADA
+    # --- KRİTİK ADIM: IMPORTLAR ---
+    # Python hafızasında eski modüller kalmasın diye burada importluyoruz.
+    # AutoTokenizer'ı da buraya ekliyoruz ki kesin çalışsın.
+    from transformers import (
+        CLIPImageProcessor, 
+        CLIPVisionModelWithProjection,
+        CLIPTextModel,
+        CLIPTextModelWithProjection,
+        AutoTokenizer
+    )
+    
     sys.path.append(os.getcwd())
     from preprocess.humanparsing.run_parsing import Parsing
     from preprocess.openpose.run_openpose import OpenPose
@@ -133,7 +154,7 @@ def load_model():
 
     model = {"pipe": pipe, "parsing": parsing, "openpose": openpose, "device": device}
     MODEL_LOADED = True
-    print("✅ Sistem Hazır! (v44)")
+    print("✅ Sistem Hazır! (v45)")
     return model
 
 # --- HELPER ---
@@ -155,7 +176,7 @@ def smart_resize(img, width, height):
 
 # --- HANDLER ---
 def handler(job):
-    print("🚀 HANDLER ÇALIŞIYOR (v44)")
+    print("🚀 HANDLER ÇALIŞIYOR (v45)")
     data = job["input"]
     try:
         mdl = load_model()
@@ -187,12 +208,3 @@ def handler(job):
         device = mdl["device"]
         pose_tensor = transforms.ToTensor()(pose).unsqueeze(0).to(device, torch.float16)
         cloth_tensor = transforms.ToTensor()(garment).unsqueeze(0).to(device, torch.float16)
-        
-        result = mdl["pipe"](
-            prompt="clothes", image=human, mask_image=mask_image, ip_adapter_image=garment, 
-            cloth=cloth_tensor, pose_img=pose_tensor, num_inference_steps=steps, guidance_scale=2.0,
-            generator=torch.Generator(device).manual_seed(seed), height=1024, width=768
-        ).images[0]
-    return {"output": img_to_b64(result)}
-
-runpod.serverless.start({"handler": handler})
