@@ -10,7 +10,7 @@ import runpod
 from torchvision import transforms 
 from huggingface_hub import snapshot_download
 
-# Standartlar yukarıda. Model importları aşağıda.
+# Standartlar yukarıda. Model importları fix_buggy_code'dan sonraya.
 
 from transformers import (
     CLIPImageProcessor, 
@@ -25,16 +25,16 @@ model = {}
 
 def fix_buggy_code():
     """
-    1. text_embeds (2D fix)
-    2. time_ids (sample referanslı fix)
-    3. encoder_hidden_states (1280 -> 2048 Padding Fix) <-- YENİ EKLENDİ
+    Nihai Boyut Düzeltici.
+    encoder_hidden_states boyutu ne gelirse gelsin (640, 1280 vs),
+    onu dinamik olarak hesaplayıp 2048'e (SDXL Standardı) tamamlar.
     """
     target_file = "src/unet_hacked_garmnet.py"
     if not os.path.exists(target_file):
         print(f"⚠️ Uyarı: {target_file} bulunamadı.")
         return
 
-    print(f"🔧 KOD AMELİYATI (v38 - Padding Fix): {target_file}")
+    print(f"🔧 KOD AMELİYATI (v39 - Universal Padding): {target_file}")
     with open(target_file, "r") as f:
         lines = f.readlines()
 
@@ -47,20 +47,25 @@ def fix_buggy_code():
     search_time = 'if "time_ids" not in added_cond_kwargs:'
     
     for line in lines:
-        # 1. TEXT EMBEDS VE PADDING DÜZELTMESİ (HEPSİ BİR ARADA)
+        # 1. TEXT EMBEDS VE DİNAMİK PADDING
         if search_text in line:
             indent = line.split('if')[0]
             
-            # --- YENİ EKLENEN KISIM: PADDING ---
-            # Gelen veri 1280 ise, yanına 0 ekleyerek 2048 yap.
-            new_lines.append(f'{indent}# PADDING FIX: 1280 -> 2048\n')
-            new_lines.append(f'{indent}if encoder_hidden_states is not None and encoder_hidden_states.shape[-1] == 1280:\n')
-            new_lines.append(f'{indent}    encoder_hidden_states = torch.nn.functional.pad(encoder_hidden_states, (0, 768))\n')
+            # --- YENİ EKLENEN KISIM: UNIVERSAL PADDING ---
+            # Gelen boyut ne olursa olsun, 2048'den çıkar ve aradaki fark kadar 0 ekle.
+            new_lines.append(f'{indent}# UNIVERSAL PADDING FIX (Auto-Fit to 2048)\n')
+            new_lines.append(f'{indent}if encoder_hidden_states is not None:\n')
+            new_lines.append(f'{indent}    current_dim = encoder_hidden_states.shape[-1]\n')
+            new_lines.append(f'{indent}    if current_dim != 2048:\n')
+            new_lines.append(f'{indent}        pad_amt = 2048 - current_dim\n')
+            new_lines.append(f'{indent}        if pad_amt > 0:\n')
+            new_lines.append(f'{indent}            encoder_hidden_states = torch.nn.functional.pad(encoder_hidden_states, (0, pad_amt))\n')
             
             # Kutu boşsa yarat
             new_lines.append(f'{indent}if added_cond_kwargs is None: added_cond_kwargs = {{}}\n')
             
-            # Text embeds yoksa 0 yarat (2 Boyutlu: 1x1280)
+            # Text embeds yoksa 0 yarat (Şimdi padded encoder_hidden_states boyutunu referans alabiliriz veya 1280)
+            # Ama sample referansı en temizi.
             new_lines.append(f'{indent}if "text_embeds" not in added_cond_kwargs:\n')
             new_lines.append(f'{indent}    added_cond_kwargs["text_embeds"] = torch.zeros((1, 1280), device=sample.device, dtype=sample.dtype)\n')
             
@@ -83,7 +88,7 @@ def fix_buggy_code():
     if fixed_text or fixed_time:
         with open(target_file, "w") as f:
             f.writelines(new_lines)
-        print(f"✅ AMELİYAT BAŞARILI. (Padding: {fixed_text}, Time: {fixed_time})")
+        print(f"✅ AMELİYAT BAŞARILI. (Dynamic Padding: {fixed_text}, Time: {fixed_time})")
     else:
         print("ℹ️ Kod zaten düzgün veya hedef satırlar bulunamadı.")
 
@@ -112,7 +117,7 @@ def load_model():
     if MODEL_LOADED: return model
 
     download_smart()
-    fix_buggy_code() # <--- PADDING AMELİYATI BURADA
+    fix_buggy_code() # <--- UNIVERSAL PADDING FIX
 
     sys.path.append(os.getcwd())
     from preprocess.humanparsing.run_parsing import Parsing
@@ -147,7 +152,7 @@ def load_model():
 
     model = {"pipe": pipe, "parsing": parsing, "openpose": openpose, "device": device}
     MODEL_LOADED = True
-    print("✅ Sistem Hazır! (v38)")
+    print("✅ Sistem Hazır! (v39)")
     return model
 
 # --- HELPER ---
@@ -169,7 +174,7 @@ def smart_resize(img, width, height):
 
 # --- HANDLER ---
 def handler(job):
-    print("🚀 HANDLER ÇALIŞIYOR (v38)")
+    print("🚀 HANDLER ÇALIŞIYOR (v39)")
     data = job["input"]
     try:
         mdl = load_model()
