@@ -25,15 +25,15 @@ model = {}
 
 def fix_buggy_code():
     """
-    encoder_hidden_states'in None gelme ihtimaline karşı
-    device referansı olarak 'sample' kullanan nihai fix.
+    Boyut uyuşmazlığını (3D vs 2D) çözen nihai fix.
+    encoder_hidden_states (3D) yerine, direkt 2D Zero Tensor veriyoruz.
     """
     target_file = "src/unet_hacked_garmnet.py"
     if not os.path.exists(target_file):
         print(f"⚠️ Uyarı: {target_file} bulunamadı.")
         return
 
-    print(f"🔧 KOD AMELİYATI (v36): {target_file}")
+    print(f"🔧 KOD AMELİYATI (v37 - Boyut Fix): {target_file}")
     with open(target_file, "r") as f:
         lines = f.readlines()
 
@@ -46,34 +46,28 @@ def fix_buggy_code():
     search_time = 'if "time_ids" not in added_cond_kwargs:'
     
     for line in lines:
-        # 1. TEXT EMBEDS DÜZELTMESİ
+        # 1. TEXT EMBEDS DÜZELTMESİ (ARTIK 2D VERİYORUZ)
         if search_text in line:
             indent = line.split('if')[0]
             
-            # Kutu boşsa yarat
             new_lines.append(f'{indent}if added_cond_kwargs is None: added_cond_kwargs = {{}}\n')
-            # Text embeds yoksa encoder_hidden_states'i kopyala (varsa)
-            # Eğer encoder_hidden_states de yoksa boş geç, hata vermesin.
-            new_lines.append(f'{indent}if "text_embeds" not in added_cond_kwargs:\n')
-            new_lines.append(f'{indent}    if encoder_hidden_states is not None:\n')
-            new_lines.append(f'{indent}        added_cond_kwargs["text_embeds"] = encoder_hidden_states\n')
-            new_lines.append(f'{indent}    else:\n')
-            new_lines.append(f'{indent}        added_cond_kwargs["text_embeds"] = torch.zeros((1, 77, 1280), device=sample.device, dtype=sample.dtype)\n') # Fallback
             
-            # Hata satırını iptal et
+            # --- KRİTİK DEĞİŞİKLİK BURADA ---
+            # Eskiden encoder_hidden_states veriyorduk (3D idi).
+            # Şimdi (1, 1280) boyutunda 2D tensor veriyoruz. SDXL standardı budur.
+            new_lines.append(f'{indent}if "text_embeds" not in added_cond_kwargs:\n')
+            new_lines.append(f'{indent}    added_cond_kwargs["text_embeds"] = torch.zeros((1, 1280), device=sample.device, dtype=sample.dtype)\n')
+            
             new_lines.append(f'{indent}if False: # TEXT ERROR İPTAL\n')
             fixed_text = True
             
-        # 2. TIME IDS DÜZELTMESİ (REFERANS: SAMPLE)
+        # 2. TIME IDS DÜZELTMESİ (AYNEN DEVAM)
         elif search_time in line:
             indent = line.split('if')[0]
             
-            # Time ids yoksa, 0'lardan oluşan sahte bir tensor yarat
-            # BU SEFER 'sample.device' KULLANIYORUZ. SAMPLE ASLA NONE OLAMAZ.
             new_lines.append(f'{indent}if "time_ids" not in added_cond_kwargs:\n')
             new_lines.append(f'{indent}    added_cond_kwargs["time_ids"] = torch.zeros((1, 6), device=sample.device, dtype=sample.dtype)\n')
             
-            # Hata satırını iptal et
             new_lines.append(f'{indent}if False: # TIME ERROR İPTAL\n')
             fixed_time = True
             
@@ -112,9 +106,7 @@ def load_model():
     if MODEL_LOADED: return model
 
     download_smart()
-    
-    # --- AMELİYAT ZAMANI ---
-    fix_buggy_code()
+    fix_buggy_code() # <--- Ameliyat
 
     sys.path.append(os.getcwd())
     from preprocess.humanparsing.run_parsing import Parsing
@@ -149,7 +141,7 @@ def load_model():
 
     model = {"pipe": pipe, "parsing": parsing, "openpose": openpose, "device": device}
     MODEL_LOADED = True
-    print("✅ Sistem Hazır! (v36)")
+    print("✅ Sistem Hazır! (v37)")
     return model
 
 # --- HELPER ---
@@ -171,7 +163,7 @@ def smart_resize(img, width, height):
 
 # --- HANDLER ---
 def handler(job):
-    print("🚀 HANDLER ÇALIŞIYOR (v36)")
+    print("🚀 HANDLER ÇALIŞIYOR (v37)")
     data = job["input"]
     try:
         mdl = load_model()
