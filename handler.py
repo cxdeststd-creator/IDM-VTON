@@ -5,25 +5,23 @@ import numpy as np
 import torch
 import shutil
 import sys
+import gc
 from PIL import Image, ImageOps
 import runpod
 from torchvision import transforms 
 from huggingface_hub import snapshot_download
 
-# --- ADIM 1: DOSYA TAMİRİ (MATEMATİK AYARI) ---
-def force_fix_file():
+# --- 1. DOSYA TAMİRİ (KESME ve BİÇME) ---
+def force_fix_file_with_slicer():
     target_file = "src/unet_hacked_garmnet.py"
     if not os.path.exists(target_file):
-        print(f"⚠️ Dosya bulunamadı: {target_file}")
         return
 
-    print("🔧 [v49] Dosya yamalanıyor (Encoder=2048, Text=1280)...")
+    print("🔧 [v51] Dosya yamalanıyor (OTOMATİK BOYUTLANDIRICI)...")
     with open(target_file, "r") as f:
         lines = f.readlines()
 
-    # Eğer daha önce yamaladıysak tekrar yapma
-    if any("FIXED_BY_GEMINI_V48" in line for line in lines):
-        print("✅ Dosya zaten yamalı (v48+), devam ediliyor.")
+    if any("FIXED_BY_GEMINI_V51" in line for line in lines):
         return
 
     new_lines = []
@@ -33,22 +31,26 @@ def force_fix_file():
     for line in lines:
         if search_text in line and not fixed:
             indent = line.split('if')[0]
-            
-            new_lines.append(f'{indent}# FIXED_BY_GEMINI_V48\n')
+            new_lines.append(f'{indent}# FIXED_BY_GEMINI_V51 (THE SLICER)\n')
             new_lines.append(f'{indent}if added_cond_kwargs is None: added_cond_kwargs = {{}}\n')
             
-            # ENCODER PADDING (2048)
+            # --- KRİTİK MÜDAHALE: ENCODER HIDDEN STATES ---
             new_lines.append(f'{indent}if encoder_hidden_states is not None:\n')
-            new_lines.append(f'{indent}    if encoder_hidden_states.shape[-1] != 2048:\n')
-            new_lines.append(f'{indent}        pad = 2048 - encoder_hidden_states.shape[-1]\n')
-            new_lines.append(f'{indent}        if pad > 0:\n')
-            new_lines.append(f'{indent}            encoder_hidden_states = torch.nn.functional.pad(encoder_hidden_states, (0, pad))\n')
+            new_lines.append(f'{indent}    curr_dim = encoder_hidden_states.shape[-1]\n')
+            
+            # DURUM 1: Veri ÇOK BÜYÜK (3072 geldiyse -> 2048'e KES)
+            new_lines.append(f'{indent}    if curr_dim > 2048:\n')
+            new_lines.append(f'{indent}        encoder_hidden_states = encoder_hidden_states[:, :, :2048]\n')
+            
+            # DURUM 2: Veri KÜÇÜK (640 geldiyse -> 2048'e DOLDUR)
+            new_lines.append(f'{indent}    elif curr_dim < 2048:\n')
+            new_lines.append(f'{indent}        pad = 2048 - curr_dim\n')
+            new_lines.append(f'{indent}        encoder_hidden_states = torch.nn.functional.pad(encoder_hidden_states, (0, pad))\n')
 
-            # TEXT EMBEDS (1280 - Hata buradaydı, düzelttik)
+            # TEXT EMBEDS (Bunu da garantiye alıp 1280 yapıyoruz)
             new_lines.append(f'{indent}if "text_embeds" not in added_cond_kwargs:\n')
             new_lines.append(f'{indent}    added_cond_kwargs["text_embeds"] = torch.zeros((1, 1280), device=sample.device, dtype=sample.dtype)\n')
             
-            # TIME IDS
             new_lines.append(f'{indent}if "time_ids" not in added_cond_kwargs:\n')
             new_lines.append(f'{indent}    added_cond_kwargs["time_ids"] = torch.zeros((1, 6), device=sample.device, dtype=sample.dtype)\n')
             
@@ -58,22 +60,18 @@ def force_fix_file():
     if fixed:
         with open(target_file, "w") as f:
             f.writelines(new_lines)
-        print("✅ Dosya başarıyla kaydedildi.")
+        print("✅ Dosya başarıyla kaydedildi (Slicer Aktif).")
 
-# --- ADIM 2: İNDİRME VE HAZIRLIK ---
-print("⬇️ Dosyalar indiriliyor...")
+# --- 2. HAZIRLIK ---
+print("⬇️ Sistem Hazırlanıyor...")
+torch.cuda.empty_cache()
 
-# UNet ve Python dosyaları (Tamir için)
-snapshot_download(repo_id="yisol/IDM-VTON", local_dir="ckpt", allow_patterns=["*.py", "unet/*"], local_dir_use_symlinks=True)
-
-# Tokenizer Dosyaları (Eksik olanlar bunlar!)
-# Yıldız (*) yerine çift yıldız (**) veya spesifik dosya ekliyoruz.
-snapshot_download(repo_id="yisol/IDM-VTON", local_dir="ckpt", allow_patterns=["tokenizer/**", "tokenizer_2/**", "*.json", "*.txt"], local_dir_use_symlinks=True)
+snapshot_download(repo_id="yisol/IDM-VTON", local_dir="ckpt", allow_patterns=["*.py", "unet/*", "tokenizer/**", "tokenizer_2/**", "*.json", "*.txt"], local_dir_use_symlinks=True)
 
 # Yamayı uygula
-force_fix_file()
+force_fix_file_with_slicer()
 
-# --- ADIM 3: IMPORTLAR ---
+# --- 3. IMPORTLAR ---
 sys.path.append(os.getcwd())
 
 try:
@@ -100,9 +98,7 @@ def load_model():
     global MODEL_LOADED, model
     if MODEL_LOADED: return model
 
-    print("🚀 Modeller hafızaya alınıyor...")
-    
-    # Kalan ağır modeller
+    print("🚀 Modeller Yükleniyor...")
     snapshot_download(repo_id="yisol/IDM-VTON", local_dir="ckpt", allow_patterns=["text_encoder/*", "text_encoder_2/*", "vae/*", "scheduler/*", "humanparsing/*", "densepose/*", "openpose/*"], local_dir_use_symlinks=True)
     snapshot_download(repo_id="laion/CLIP-ViT-H-14-laion2B-s32B-b79K", local_dir="image_encoder", allow_patterns=["*.json", "*.safetensors", "*.txt"], local_dir_use_symlinks=True)
     snapshot_download(repo_id="stabilityai/stable-diffusion-xl-base-1.0", local_dir="unet_garm", allow_patterns=["unet/*", "*.json"], local_dir_use_symlinks=True)
@@ -116,7 +112,6 @@ def load_model():
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
-    # Tokenizerları yükle (Dosyalar inince bu hata düzelecek)
     tokenizer = AutoTokenizer.from_pretrained("ckpt", subfolder="tokenizer", use_fast=False)
     tokenizer_2 = AutoTokenizer.from_pretrained("ckpt", subfolder="tokenizer_2", use_fast=False)
     
@@ -124,6 +119,7 @@ def load_model():
     text_encoder_2 = CLIPTextModelWithProjection.from_pretrained("ckpt", subfolder="text_encoder_2", torch_dtype=torch.float16).to(device)
     image_encoder = CLIPVisionModelWithProjection.from_pretrained("image_encoder", torch_dtype=torch.float16).to(device)
     feature_extractor = CLIPImageProcessor.from_pretrained("image_encoder", torch_dtype=torch.float16)
+    
     unet = UNet2DConditionModel.from_pretrained("ckpt", subfolder="unet", torch_dtype=torch.float16).to(device)
     
     garm_path = "unet_garm/unet" if os.path.exists("unet_garm/unet") else "unet_garm"
@@ -141,7 +137,7 @@ def load_model():
 
     model = {"pipe": pipe, "parsing": parsing, "openpose": openpose, "device": device}
     MODEL_LOADED = True
-    print("✅ Sistem Hazır! (v49)")
+    print("✅ Sistem Hazır! (v51)")
     return model
 
 def b64_to_img(b64):
@@ -161,7 +157,10 @@ def smart_resize(img, width, height):
     return background
 
 def handler(job):
-    print("🚀 HANDLER ÇALIŞIYOR (v49)")
+    gc.collect()
+    torch.cuda.empty_cache()
+    
+    print("🚀 HANDLER ÇALIŞIYOR (v51)")
     data = job["input"]
     try:
         mdl = load_model()
@@ -178,32 +177,4 @@ def handler(job):
                 mask_arr = (parse_arr == 4) | (parse_arr == 6) | (parse_arr == 7)
                 mask_image = Image.fromarray((mask_arr * 255).astype(np.uint8))
             except:
-                mask_image = Image.new("L", human.size, 0)
-                
-            human_cv = np.array(human)[:, :, ::-1].copy() 
-            pose = None
-            try:
-                raw = mdl["openpose"](human_cv)
-                if isinstance(raw, dict) and "pose_img" in raw: pose = raw["pose_img"]
-                elif isinstance(raw, Image.Image): pose = raw
-            except: pass
-            if pose is None: pose = Image.new("RGB", human.size, (0,0,0))
-            
-            device = mdl["device"]
-            pose_tensor = transforms.ToTensor()(pose).unsqueeze(0).to(device, torch.float16)
-            cloth_tensor = transforms.ToTensor()(garment).unsqueeze(0).to(device, torch.float16)
-            
-            result = mdl["pipe"](
-                prompt="clothes", image=human, mask_image=mask_image, ip_adapter_image=garment, 
-                cloth=cloth_tensor, pose_img=pose_tensor, num_inference_steps=steps, guidance_scale=2.0,
-                generator=torch.Generator(device).manual_seed(seed), height=1024, width=768
-            ).images[0]
-        return {"output": img_to_b64(result)}
-        
-    except Exception as e:
-        import traceback
-        trace = traceback.format_exc()
-        return {"error": str(e), "trace": trace}
-
-print("🔌 RunPod Başlatılıyor...")
-runpod.serverless.start({"handler": handler})
+                mask_image = Image.new("L", human.
