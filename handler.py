@@ -10,7 +10,7 @@ import runpod
 from torchvision import transforms 
 from huggingface_hub import snapshot_download
 
-# Standart importlar yukarıda. Model importlarını fix_buggy_code'dan sonraya saklıyoruz.
+# Standartlar yukarıda. Model importları fix_buggy_code'dan sonraya.
 
 from transformers import (
     CLIPImageProcessor, 
@@ -25,52 +25,65 @@ model = {}
 
 def fix_buggy_code():
     """
-    Modelin 'text_embeds' verisini bulamadığı yeri bypass eder.
-    Pipeline'ın gönderdiği 'encoder_hidden_states' verisini
-    modelin beklediği 'added_cond_kwargs["text_embeds"]' içine kopyalar.
+    Hem 'text_embeds' hem de 'time_ids' hatasını çözen
+    Gelişmiş Kod Cerrahı.
     """
     target_file = "src/unet_hacked_garmnet.py"
     if not os.path.exists(target_file):
         print(f"⚠️ Uyarı: {target_file} bulunamadı.")
         return
 
-    print(f"🔧 KOD AMELİYATI BAŞLIYOR: {target_file}")
+    print(f"🔧 KOD AMELİYATI (v35): {target_file}")
     with open(target_file, "r") as f:
         lines = f.readlines()
 
     new_lines = []
-    fixed = False
     
-    # Hata veren o gıcık satırı arıyoruz
-    search_str = 'if "text_embeds" not in added_cond_kwargs:'
+    # İki hatayı da takip ediyoruz
+    fixed_text = False
+    fixed_time = False
+    
+    # Aranacak satırlar
+    search_text = 'if "text_embeds" not in added_cond_kwargs:'
+    search_time = 'if "time_ids" not in added_cond_kwargs:'
     
     for line in lines:
-        if search_str in line:
-            # Satırın başındaki boşluğu (indentation) kopyala ki Python kızmasın
+        # 1. TEXT EMBEDS DÜZELTMESİ
+        if search_text in line:
             indent = line.split('if')[0]
+            print("⚡ 'text_embeds' hatası bypass ediliyor...")
             
-            print("⚡ Hatalı satır bulundu, bypass kodu enjekte ediliyor...")
-            
-            # 1. Müdahale: Kutu boşsa (None), boş kutu yarat.
+            # Kutu boşsa yarat
             new_lines.append(f'{indent}if added_cond_kwargs is None: added_cond_kwargs = {{}}\n')
-            
-            # 2. Müdahale: Eğer text_embeds yoksa, encoder_hidden_states'i oraya kopyala!
-            # (İşte sihirli dokunuş burası)
+            # Text embeds yoksa encoder_hidden_states'i kopyala
             new_lines.append(f'{indent}if "text_embeds" not in added_cond_kwargs: added_cond_kwargs["text_embeds"] = encoder_hidden_states\n')
+            # Hata satırını iptal et
+            new_lines.append(f'{indent}if False: # TEXT ERROR İPTAL\n')
+            fixed_text = True
             
-            # 3. Müdahale: Orijinal hata kontrolünü iptal et (if False yaparak)
-            new_lines.append(f'{indent}if False: # HATA KONTROLU İPTAL EDİLDİ\n')
+        # 2. TIME IDS DÜZELTMESİ (YENİ EKLEME)
+        elif search_time in line:
+            indent = line.split('if')[0]
+            print("⚡ 'time_ids' hatası bypass ediliyor...")
             
-            fixed = True
+            # Time ids yoksa, 0'lardan oluşan sahte bir tensor yarat (SDXL 6 değer ister)
+            # encoder_hidden_states'in cihazını (gpu/cpu) ve tipini kopyalıyoruz ki hata vermesin.
+            new_lines.append(f'{indent}if "time_ids" not in added_cond_kwargs:\n')
+            new_lines.append(f'{indent}    added_cond_kwargs["time_ids"] = torch.zeros((1, 6), device=encoder_hidden_states.device, dtype=encoder_hidden_states.dtype)\n')
+            
+            # Hata satırını iptal et
+            new_lines.append(f'{indent}if False: # TIME ERROR İPTAL\n')
+            fixed_time = True
+            
         else:
             new_lines.append(line)
             
-    if fixed:
+    if fixed_text or fixed_time:
         with open(target_file, "w") as f:
             f.writelines(new_lines)
-        print("✅ AMELİYAT BAŞARILI: Veri akışı düzeltildi.")
+        print(f"✅ AMELİYAT BAŞARILI. (Text: {fixed_text}, Time: {fixed_time})")
     else:
-        print("ℹ️ Kod zaten düzgün veya hedef satır bulunamadı.")
+        print("ℹ️ Kod zaten düzgün veya hedef satırlar bulunamadı.")
 
 def download_smart():
     print("⬇️ MODELLER KONTROL EDİLİYOR...")
@@ -96,13 +109,11 @@ def load_model():
     global MODEL_LOADED, model
     if MODEL_LOADED: return model
 
-    # 1. İndir
     download_smart()
     
-    # 2. Tamir Et (Code Injection)
+    # --- AMELİYAT ZAMANI ---
     fix_buggy_code()
 
-    # 3. Yükle (Importlar burada)
     sys.path.append(os.getcwd())
     from preprocess.humanparsing.run_parsing import Parsing
     from preprocess.openpose.run_openpose import OpenPose
@@ -116,7 +127,6 @@ def load_model():
     parsing = Parsing(0)
     openpose = OpenPose(0)
     
-    # use_fast=False ile tokenizer'ı da sağlama aldık
     tokenizer = AutoTokenizer.from_pretrained("ckpt", subfolder="tokenizer", use_fast=False)
     tokenizer_2 = AutoTokenizer.from_pretrained("ckpt", subfolder="tokenizer_2", use_fast=False)
     text_encoder = CLIPTextModel.from_pretrained("ckpt", subfolder="text_encoder", torch_dtype=torch.float16).to(device)
@@ -137,7 +147,7 @@ def load_model():
 
     model = {"pipe": pipe, "parsing": parsing, "openpose": openpose, "device": device}
     MODEL_LOADED = True
-    print("✅ Sistem Hazır! (v34)")
+    print("✅ Sistem Hazır! (v35)")
     return model
 
 # --- HELPER ---
@@ -159,7 +169,7 @@ def smart_resize(img, width, height):
 
 # --- HANDLER ---
 def handler(job):
-    print("🚀 HANDLER ÇALIŞIYOR (v34)")
+    print("🚀 HANDLER ÇALIŞIYOR (v35)")
     data = job["input"]
     try:
         mdl = load_model()
