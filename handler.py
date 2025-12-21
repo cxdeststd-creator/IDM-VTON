@@ -10,31 +10,23 @@ import runpod
 from torchvision import transforms 
 from huggingface_hub import snapshot_download
 
-# --- DİKKAT: BURADA IDM-VTON IMPORTLARI YOK! ---
-# Onları aşağıda, tamirden sonra yapacağız.
-
-from transformers import (
-    CLIPImageProcessor, 
-    CLIPVisionModelWithProjection,
-    CLIPTextModel,
-    CLIPTextModelWithProjection,
-    AutoTokenizer
-)
+# --- IMPORTLARI YİNE AŞAĞIDA YAPIYORUZ ---
 
 MODEL_LOADED = False
 model = {}
 
 def fix_code_on_disk():
     """
-    Dosyayı disk üzerinde kalıcı olarak düzeltir.
-    Hem eksik Text Embeds'i ekler, hem de 640/1280 gelen veriyi 2048'e tamamlar.
+    HASSAS AYAR (v44):
+    1. Encoder Hidden States -> 2048'e tamamla (Cross Attention için).
+    2. Text Embeds -> 1280 olarak yarat (Add Embedding Projection için).
     """
     target_file = "src/unet_hacked_garmnet.py"
     if not os.path.exists(target_file):
         print(f"⚠️ Uyarı: {target_file} bulunamadı.")
         return
 
-    print(f"🔧 DİSK ÜZERİNDE TAMİR BAŞLIYOR: {target_file}")
+    print(f"🔧 DİSK ÜZERİNDE TAMİR BAŞLIYOR (v44): {target_file}")
     with open(target_file, "r") as f:
         lines = f.readlines()
 
@@ -48,24 +40,24 @@ def fix_code_on_disk():
         if search_text in line and not fixed:
             indent = line.split('if')[0] # Girinti kopyala
             
-            print("⚡ KOD ENJEKTE EDİLİYOR (Padding + Missing Keys)...")
+            print("⚡ KOD ENJEKTE EDİLİYOR (Encoder=2048, Text=1280)...")
             
             # 1. Added Cond Kwargs Koruması
             new_lines.append(f'{indent}if added_cond_kwargs is None: added_cond_kwargs = {{}}\n')
 
-            # 2. UNIVERSAL PADDING (Gelen veri neyse 2048'e tamamla)
-            # Bu, 640x2048 hatasını çözen asıl kısımdır.
+            # 2. ENCODER PADDING (Burası 2048 OLMALI - Doğruydu, dokunmuyoruz)
             new_lines.append(f'{indent}if encoder_hidden_states is not None:\n')
             new_lines.append(f'{indent}    if encoder_hidden_states.shape[-1] != 2048:\n')
             new_lines.append(f'{indent}        pad = 2048 - encoder_hidden_states.shape[-1]\n')
             new_lines.append(f'{indent}        if pad > 0:\n')
             new_lines.append(f'{indent}            encoder_hidden_states = torch.nn.functional.pad(encoder_hidden_states, (0, pad))\n')
 
-            # 3. SAHTE VERİLER (Text Embeds & Time IDs)
-            # Text embeds'i de 2048 yapıyoruz ki model ağlamasın.
+            # 3. TEXT EMBEDS (Burası 1280 OLMALI - İşte Düzeltme Burada!)
+            # v43'te burayı 2048 yapmıştık, hata oradaydı. Şimdi 1280'e çekiyoruz.
             new_lines.append(f'{indent}if "text_embeds" not in added_cond_kwargs:\n')
-            new_lines.append(f'{indent}    added_cond_kwargs["text_embeds"] = torch.zeros((1, 2048), device=sample.device, dtype=sample.dtype)\n')
+            new_lines.append(f'{indent}    added_cond_kwargs["text_embeds"] = torch.zeros((1, 1280), device=sample.device, dtype=sample.dtype)\n')
             
+            # 4. Time IDs
             new_lines.append(f'{indent}if "time_ids" not in added_cond_kwargs:\n')
             new_lines.append(f'{indent}    added_cond_kwargs["time_ids"] = torch.zeros((1, 6), device=sample.device, dtype=sample.dtype)\n')
             
@@ -76,7 +68,7 @@ def fix_code_on_disk():
     if fixed:
         with open(target_file, "w") as f:
             f.writelines(new_lines)
-        print("✅ Dosya başarıyla güncellendi.")
+        print("✅ Dosya başarıyla güncellendi (Precision Mode).")
     else:
         print("ℹ️ Dosya zaten güncel veya hedef satır bulunamadı.")
 
@@ -104,23 +96,16 @@ def load_model():
     global MODEL_LOADED, model
     if MODEL_LOADED: return model
 
-    # 1. Dosyaları İndir
     download_smart()
-    
-    # 2. KODU TAMİR ET (Importlardan ÖNCE!)
-    fix_code_on_disk()
+    fix_code_on_disk() # <--- Hassas Ameliyat
 
-    # 3. ŞİMDİ IMPORT ET (Yeni, düzeltilmiş kod hafızaya alınacak)
-    print("🔄 Modüller yükleniyor (Düzeltilmiş versiyon)...")
+    # IMPORTLAR BURADA
     sys.path.append(os.getcwd())
-    
-    # --- IMPORTLAR BURAYA TAŞINDI ---
     from preprocess.humanparsing.run_parsing import Parsing
     from preprocess.openpose.run_openpose import OpenPose
     from src.tryon_pipeline import StableDiffusionXLInpaintPipeline
     from src.unet_hacked_tryon import UNet2DConditionModel
     from src.unet_hacked_garmnet import UNet2DConditionModel as UNetGarm
-    # -------------------------------
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"🚀 Modeller Yükleniyor... Device: {device}")
@@ -148,7 +133,7 @@ def load_model():
 
     model = {"pipe": pipe, "parsing": parsing, "openpose": openpose, "device": device}
     MODEL_LOADED = True
-    print("✅ Sistem Hazır! (v43)")
+    print("✅ Sistem Hazır! (v44)")
     return model
 
 # --- HELPER ---
@@ -170,7 +155,7 @@ def smart_resize(img, width, height):
 
 # --- HANDLER ---
 def handler(job):
-    print("🚀 HANDLER ÇALIŞIYOR (v43)")
+    print("🚀 HANDLER ÇALIŞIYOR (v44)")
     data = job["input"]
     try:
         mdl = load_model()
