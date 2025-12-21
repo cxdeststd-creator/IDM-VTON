@@ -10,7 +10,7 @@ import runpod
 from torchvision import transforms 
 from huggingface_hub import snapshot_download
 
-# Standartlar yukarıda. Model importları fix_buggy_code'dan sonraya.
+# Standartlar yukarıda.
 
 from transformers import (
     CLIPImageProcessor, 
@@ -23,74 +23,90 @@ from transformers import (
 MODEL_LOADED = False
 model = {}
 
-def fix_buggy_code():
+def fix_unet_bugs():
     """
-    Nihai Boyut Düzeltici.
-    encoder_hidden_states boyutu ne gelirse gelsin (640, 1280 vs),
-    onu dinamik olarak hesaplayıp 2048'e (SDXL Standardı) tamamlar.
+    1. DOSYA AMELİYATI: UNet (Text Embeds & Time IDs Hatası)
     """
     target_file = "src/unet_hacked_garmnet.py"
-    if not os.path.exists(target_file):
-        print(f"⚠️ Uyarı: {target_file} bulunamadı.")
-        return
+    if not os.path.exists(target_file): return
 
-    print(f"🔧 KOD AMELİYATI (v39 - Universal Padding): {target_file}")
+    print(f"🔧 UNET AMELİYATI (v40): {target_file}")
     with open(target_file, "r") as f:
         lines = f.readlines()
 
     new_lines = []
-    
-    fixed_text = False
-    fixed_time = False
+    fixed = False
     
     search_text = 'if "text_embeds" not in added_cond_kwargs:'
     search_time = 'if "time_ids" not in added_cond_kwargs:'
     
     for line in lines:
-        # 1. TEXT EMBEDS VE DİNAMİK PADDING
         if search_text in line:
             indent = line.split('if')[0]
-            
-            # --- YENİ EKLENEN KISIM: UNIVERSAL PADDING ---
-            # Gelen boyut ne olursa olsun, 2048'den çıkar ve aradaki fark kadar 0 ekle.
-            new_lines.append(f'{indent}# UNIVERSAL PADDING FIX (Auto-Fit to 2048)\n')
-            new_lines.append(f'{indent}if encoder_hidden_states is not None:\n')
-            new_lines.append(f'{indent}    current_dim = encoder_hidden_states.shape[-1]\n')
-            new_lines.append(f'{indent}    if current_dim != 2048:\n')
-            new_lines.append(f'{indent}        pad_amt = 2048 - current_dim\n')
-            new_lines.append(f'{indent}        if pad_amt > 0:\n')
-            new_lines.append(f'{indent}            encoder_hidden_states = torch.nn.functional.pad(encoder_hidden_states, (0, pad_amt))\n')
-            
-            # Kutu boşsa yarat
+            # Kutu yarat
             new_lines.append(f'{indent}if added_cond_kwargs is None: added_cond_kwargs = {{}}\n')
-            
-            # Text embeds yoksa 0 yarat (Şimdi padded encoder_hidden_states boyutunu referans alabiliriz veya 1280)
-            # Ama sample referansı en temizi.
+            # Text embeds yoksa sample referanslı 0 yarat
             new_lines.append(f'{indent}if "text_embeds" not in added_cond_kwargs:\n')
             new_lines.append(f'{indent}    added_cond_kwargs["text_embeds"] = torch.zeros((1, 1280), device=sample.device, dtype=sample.dtype)\n')
-            
             new_lines.append(f'{indent}if False: # TEXT ERROR İPTAL\n')
-            fixed_text = True
+            fixed = True
             
-        # 2. TIME IDS DÜZELTMESİ (AYNEN DEVAM)
         elif search_time in line:
             indent = line.split('if')[0]
-            
+            # Time ids yoksa sample referanslı 0 yarat
             new_lines.append(f'{indent}if "time_ids" not in added_cond_kwargs:\n')
             new_lines.append(f'{indent}    added_cond_kwargs["time_ids"] = torch.zeros((1, 6), device=sample.device, dtype=sample.dtype)\n')
-            
             new_lines.append(f'{indent}if False: # TIME ERROR İPTAL\n')
-            fixed_time = True
-            
+            fixed = True
         else:
             new_lines.append(line)
             
-    if fixed_text or fixed_time:
-        with open(target_file, "w") as f:
-            f.writelines(new_lines)
-        print(f"✅ AMELİYAT BAŞARILI. (Dynamic Padding: {fixed_text}, Time: {fixed_time})")
-    else:
-        print("ℹ️ Kod zaten düzgün veya hedef satırlar bulunamadı.")
+    if fixed:
+        with open(target_file, "w") as f: f.writelines(new_lines)
+        print("✅ UNet Fixlendi.")
+
+def fix_pipeline_bugs():
+    """
+    2. DOSYA AMELİYATI: Pipeline (Boyut 640 -> 2048 Hatası)
+    Burada veriyi UNet'e göndermeden hemen önce yakalayıp şişiriyoruz.
+    """
+    target_file = "src/tryon_pipeline.py"
+    if not os.path.exists(target_file): return
+
+    print(f"🔧 PIPELINE AMELİYATI (v40): {target_file}")
+    with open(target_file, "r") as f:
+        lines = f.readlines()
+
+    new_lines = []
+    fixed = False
+    
+    # Hata veren satır: self.unet_encoder(cloth,t, text_embeds_cloth,return_dict=False)
+    # Bu satırdan hemen önce müdahale edeceğiz.
+    search_code = 'down,reference_features = self.unet_encoder(cloth,t, text_embeds_cloth,return_dict=False)'
+    
+    for line in lines:
+        if search_code in line and not fixed:
+            indent = line.split('down')[0] # Boşluğu kopyala
+            
+            print("⚡ Pipeline içinde boyut düzeltme kodu enjekte ediliyor...")
+            
+            # --- ENJEKTE EDİLEN KOD ---
+            # text_embeds_cloth (yani encoder_hidden_states) boyutunu kontrol et.
+            # Eğer 2048 değilse, dolgu (padding) yap.
+            new_lines.append(f'{indent}# v40 FIX: Force Padding to 2048\n')
+            new_lines.append(f'{indent}if text_embeds_cloth is not None and text_embeds_cloth.shape[-1] != 2048:\n')
+            new_lines.append(f'{indent}    pad_amount = 2048 - text_embeds_cloth.shape[-1]\n')
+            new_lines.append(f'{indent}    if pad_amount > 0:\n')
+            new_lines.append(f'{indent}        text_embeds_cloth = torch.nn.functional.pad(text_embeds_cloth, (0, pad_amount))\n')
+            
+            new_lines.append(line) # Orijinal satırı ekle
+            fixed = True
+        else:
+            new_lines.append(line)
+            
+    if fixed:
+        with open(target_file, "w") as f: f.writelines(new_lines)
+        print("✅ Pipeline Fixlendi.")
 
 def download_smart():
     print("⬇️ MODELLER KONTROL EDİLİYOR...")
@@ -117,7 +133,10 @@ def load_model():
     if MODEL_LOADED: return model
 
     download_smart()
-    fix_buggy_code() # <--- UNIVERSAL PADDING FIX
+    
+    # --- ÇİFTE AMELİYAT ---
+    fix_unet_bugs()      # Text ve Time ID'leri halleder
+    fix_pipeline_bugs()  # 640 -> 2048 Boyut hatasını halleder
 
     sys.path.append(os.getcwd())
     from preprocess.humanparsing.run_parsing import Parsing
@@ -152,7 +171,7 @@ def load_model():
 
     model = {"pipe": pipe, "parsing": parsing, "openpose": openpose, "device": device}
     MODEL_LOADED = True
-    print("✅ Sistem Hazır! (v39)")
+    print("✅ Sistem Hazır! (v40)")
     return model
 
 # --- HELPER ---
@@ -174,7 +193,7 @@ def smart_resize(img, width, height):
 
 # --- HANDLER ---
 def handler(job):
-    print("🚀 HANDLER ÇALIŞIYOR (v39)")
+    print("🚀 HANDLER ÇALIŞIYOR (v40)")
     data = job["input"]
     try:
         mdl = load_model()
