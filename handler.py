@@ -10,7 +10,7 @@ import runpod
 from torchvision import transforms 
 from huggingface_hub import snapshot_download
 
-# Standartlar yukarıda. Model importları fix_buggy_code'dan sonraya
+# Standartlar yukarıda. Model importları aşağıda.
 
 from transformers import (
     CLIPImageProcessor, 
@@ -25,15 +25,16 @@ model = {}
 
 def fix_buggy_code():
     """
-    Boyut uyuşmazlığını (3D vs 2D) çözen nihai fix.
-    encoder_hidden_states (3D) yerine, direkt 2D Zero Tensor veriyoruz.
+    1. text_embeds (2D fix)
+    2. time_ids (sample referanslı fix)
+    3. encoder_hidden_states (1280 -> 2048 Padding Fix) <-- YENİ EKLENDİ
     """
     target_file = "src/unet_hacked_garmnet.py"
     if not os.path.exists(target_file):
         print(f"⚠️ Uyarı: {target_file} bulunamadı.")
         return
 
-    print(f"🔧 KOD AMELİYATI (v37 - Boyut Fix): {target_file}")
+    print(f"🔧 KOD AMELİYATI (v38 - Padding Fix): {target_file}")
     with open(target_file, "r") as f:
         lines = f.readlines()
 
@@ -46,15 +47,20 @@ def fix_buggy_code():
     search_time = 'if "time_ids" not in added_cond_kwargs:'
     
     for line in lines:
-        # 1. TEXT EMBEDS DÜZELTMESİ (ARTIK 2D VERİYORUZ)
+        # 1. TEXT EMBEDS VE PADDING DÜZELTMESİ (HEPSİ BİR ARADA)
         if search_text in line:
             indent = line.split('if')[0]
             
+            # --- YENİ EKLENEN KISIM: PADDING ---
+            # Gelen veri 1280 ise, yanına 0 ekleyerek 2048 yap.
+            new_lines.append(f'{indent}# PADDING FIX: 1280 -> 2048\n')
+            new_lines.append(f'{indent}if encoder_hidden_states is not None and encoder_hidden_states.shape[-1] == 1280:\n')
+            new_lines.append(f'{indent}    encoder_hidden_states = torch.nn.functional.pad(encoder_hidden_states, (0, 768))\n')
+            
+            # Kutu boşsa yarat
             new_lines.append(f'{indent}if added_cond_kwargs is None: added_cond_kwargs = {{}}\n')
             
-            # --- KRİTİK DEĞİŞİKLİK BURADA ---
-            # Eskiden encoder_hidden_states veriyorduk (3D idi).
-            # Şimdi (1, 1280) boyutunda 2D tensor veriyoruz. SDXL standardı budur.
+            # Text embeds yoksa 0 yarat (2 Boyutlu: 1x1280)
             new_lines.append(f'{indent}if "text_embeds" not in added_cond_kwargs:\n')
             new_lines.append(f'{indent}    added_cond_kwargs["text_embeds"] = torch.zeros((1, 1280), device=sample.device, dtype=sample.dtype)\n')
             
@@ -77,7 +83,7 @@ def fix_buggy_code():
     if fixed_text or fixed_time:
         with open(target_file, "w") as f:
             f.writelines(new_lines)
-        print(f"✅ AMELİYAT BAŞARILI. (Text: {fixed_text}, Time: {fixed_time})")
+        print(f"✅ AMELİYAT BAŞARILI. (Padding: {fixed_text}, Time: {fixed_time})")
     else:
         print("ℹ️ Kod zaten düzgün veya hedef satırlar bulunamadı.")
 
@@ -106,7 +112,7 @@ def load_model():
     if MODEL_LOADED: return model
 
     download_smart()
-    fix_buggy_code() # <--- Ameliyat
+    fix_buggy_code() # <--- PADDING AMELİYATI BURADA
 
     sys.path.append(os.getcwd())
     from preprocess.humanparsing.run_parsing import Parsing
@@ -141,7 +147,7 @@ def load_model():
 
     model = {"pipe": pipe, "parsing": parsing, "openpose": openpose, "device": device}
     MODEL_LOADED = True
-    print("✅ Sistem Hazır! (v37)")
+    print("✅ Sistem Hazır! (v38)")
     return model
 
 # --- HELPER ---
@@ -163,7 +169,7 @@ def smart_resize(img, width, height):
 
 # --- HANDLER ---
 def handler(job):
-    print("🚀 HANDLER ÇALIŞIYOR (v37)")
+    print("🚀 HANDLER ÇALIŞIYOR (v38)")
     data = job["input"]
     try:
         mdl = load_model()
