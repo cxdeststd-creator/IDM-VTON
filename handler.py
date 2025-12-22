@@ -11,72 +11,12 @@ import runpod
 from torchvision import transforms 
 from huggingface_hub import snapshot_download
 
-# --- GÜVENLİ YAMALAMA (CRASH ÖNLEYİCİ) ---
-def safe_patch_file():
-    target_file = "src/unet_hacked_garmnet.py"
-    if not os.path.exists(target_file):
-        print("⚠️ Dosya yok, yama geçildi.")
-        return
-
-    try:
-        print("🔧 [v52] Dosya güvenli modda yamalanıyor...")
-        with open(target_file, "r") as f:
-            lines = f.readlines()
-
-        if any("FIXED_BY_GEMINI_V52" in line for line in lines):
-            print("✅ Zaten yamalı.")
-            return
-
-        new_lines = []
-        fixed = False
-        search_text = 'if "text_embeds" not in added_cond_kwargs:'
-        
-        for line in lines:
-            if search_text in line and not fixed:
-                # Mevcut girintiyi (indentation) kopyala
-                indent = line.split('if')[0]
-                
-                # Yamayı ekle (Python syntax kurallarına uygun)
-                new_lines.append(f'{indent}# FIXED_BY_GEMINI_V52\n')
-                new_lines.append(f'{indent}if added_cond_kwargs is None: added_cond_kwargs = {{}}\n')
-                
-                # --- SLICER & PADDER (3072 -> 2048) ---
-                new_lines.append(f'{indent}if encoder_hidden_states is not None:\n')
-                new_lines.append(f'{indent}    curr_dim = encoder_hidden_states.shape[-1]\n')
-                # Fazla gelirse kes (3072 -> 2048)
-                new_lines.append(f'{indent}    if curr_dim > 2048:\n')
-                new_lines.append(f'{indent}        encoder_hidden_states = encoder_hidden_states[:, :, :2048]\n')
-                # Az gelirse doldur (640 -> 2048)
-                new_lines.append(f'{indent}    elif curr_dim < 2048:\n')
-                new_lines.append(f'{indent}        pad_amt = 2048 - curr_dim\n')
-                new_lines.append(f'{indent}        encoder_hidden_states = torch.nn.functional.pad(encoder_hidden_states, (0, pad_amt))\n')
-
-                # Eksik Text Embeds (Projection Layer için 1280)
-                new_lines.append(f'{indent}if "text_embeds" not in added_cond_kwargs:\n')
-                new_lines.append(f'{indent}    added_cond_kwargs["text_embeds"] = torch.zeros((1, 1280), device=sample.device, dtype=sample.dtype)\n')
-                
-                new_lines.append(f'{indent}if "time_ids" not in added_cond_kwargs:\n')
-                new_lines.append(f'{indent}    added_cond_kwargs["time_ids"] = torch.zeros((1, 6), device=sample.device, dtype=sample.dtype)\n')
-                
-                fixed = True
-            new_lines.append(line)
-            
-        with open(target_file, "w") as f:
-            f.writelines(new_lines)
-        print("✅ Yama başarıyla uygulandı.")
-        
-    except Exception as e:
-        print(f"❌ YAMA HATASI (Kod çalışmaya devam edecek): {e}")
-
 # --- HAZIRLIK ---
-print("⬇️ Başlatılıyor...")
+print("⬇️ Sistem Hazırlanıyor...")
 torch.cuda.empty_cache()
 
 # Dosyaları indir
 snapshot_download(repo_id="yisol/IDM-VTON", local_dir="ckpt", allow_patterns=["*.py", "unet/*", "tokenizer/**", "tokenizer_2/**", "*.json", "*.txt"], local_dir_use_symlinks=True)
-
-# Yamayı uygula
-safe_patch_file()
 
 # --- IMPORTLAR ---
 sys.path.append(os.getcwd())
@@ -135,7 +75,7 @@ def load_model():
 
     model = {"pipe": pipe, "parsing": parsing, "openpose": openpose, "device": device}
     MODEL_LOADED = True
-    print("✅ Sistem Hazır! (v52)")
+    print("✅ Sistem Hazır! (v54 - App.py Logic)")
     return model
 
 def b64_to_img(b64):
@@ -158,16 +98,23 @@ def handler(job):
     gc.collect()
     torch.cuda.empty_cache()
     
-    print("🚀 HANDLER İŞ ALDI (v52)")
+    print("🚀 HANDLER İŞ ALDI (v54)")
     data = job["input"]
     try:
         mdl = load_model()
         human = smart_resize(b64_to_img(data["human_image"]), 768, 1024)
         garment = smart_resize(b64_to_img(data["garment_image"]), 768, 1024)
+        
+        # Kullanıcı description göndermezse varsayılan kullan
+        garment_des = data.get("description", "clothes") 
         steps = data.get("steps", 30)
         seed = data.get("seed", 42)
         
+        device = mdl["device"]
+        pipe = mdl["pipe"]
+
         with torch.no_grad():
+            # 1. Parsing & Masking
             try:
                 parse_pil = mdl["parsing"](human)
                 parse_arr = np.array(parse_pil)
@@ -177,6 +124,7 @@ def handler(job):
             except:
                 mask_image = Image.new("L", human.size, 0)
                 
+            # 2. OpenPose
             human_cv = np.array(human)[:, :, ::-1].copy() 
             pose = None
             try:
@@ -186,14 +134,61 @@ def handler(job):
             except: pass
             if pose is None: pose = Image.new("RGB", human.size, (0,0,0))
             
-            device = mdl["device"]
             pose_tensor = transforms.ToTensor()(pose).unsqueeze(0).to(device, torch.float16)
             cloth_tensor = transforms.ToTensor()(garment).unsqueeze(0).to(device, torch.float16)
+
+            # --- 3. PROMPT ENCODING (APP.PY MANTIĞI BURADA) ---
+            # İşte sihirli kısım burası. Embeddings'i biz hazırlıyoruz.
             
-            result = mdl["pipe"](
-                prompt="clothes", image=human, mask_image=mask_image, ip_adapter_image=garment, 
-                cloth=cloth_tensor, pose_img=pose_tensor, num_inference_steps=steps, guidance_scale=2.0,
-                generator=torch.Generator(device).manual_seed(seed), height=1024, width=768
+            prompt = "model is wearing " + garment_des
+            negative_prompt = "monochrome, lowres, bad anatomy, worst quality, low quality"
+            
+            # Ana Sahne için Encoding
+            (
+                prompt_embeds,
+                negative_prompt_embeds,
+                pooled_prompt_embeds,
+                negative_pooled_prompt_embeds,
+            ) = pipe.encode_prompt(
+                prompt,
+                num_images_per_prompt=1,
+                do_classifier_free_guidance=True,
+                negative_prompt=negative_prompt,
+            )
+
+            # Kıyafet için Encoding (Bu kısım app.py'de 'prompt_embeds_c' olarak geçiyor)
+            prompt_cloth = "a photo of " + garment_des
+            (
+                prompt_embeds_c,
+                _,
+                _,
+                _,
+            ) = pipe.encode_prompt(
+                prompt_cloth,
+                num_images_per_prompt=1,
+                do_classifier_free_guidance=False,
+                negative_prompt=negative_prompt,
+            )
+            
+            # ----------------------------------------------------
+            
+            result = pipe(
+                prompt_embeds=prompt_embeds,
+                negative_prompt_embeds=negative_prompt_embeds,
+                pooled_prompt_embeds=pooled_prompt_embeds,
+                negative_pooled_prompt_embeds=negative_pooled_prompt_embeds,
+                num_inference_steps=steps,
+                guidance_scale=2.0,
+                generator=torch.Generator(device).manual_seed(seed),
+                strength=1.0,
+                pose_img=pose_tensor,
+                text_embeds_cloth=prompt_embeds_c, # <-- İşte 2048/1280 karmaşasını çözen anahtar
+                cloth=cloth_tensor,
+                mask_image=mask_image,
+                image=human, 
+                height=1024,
+                width=768,
+                ip_adapter_image=garment,
             ).images[0]
         
         torch.cuda.empty_cache()
