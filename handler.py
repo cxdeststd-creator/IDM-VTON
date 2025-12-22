@@ -6,6 +6,7 @@ import torch
 import shutil
 import sys
 import gc
+import types # Monkey Patch için gerekli
 from PIL import Image, ImageOps
 import runpod
 from torchvision import transforms 
@@ -32,6 +33,39 @@ from src.unet_hacked_garmnet import UNet2DConditionModel as UNetGarm
 
 MODEL_LOADED = False
 model = {}
+
+# --- 🧠 BEYİN AMELİYATI (Monkey Patch v2) ---
+# Bu fonksiyon, orijinal fonksiyonun yerine geçecek.
+# Amacı: "NoneType" hatasını engellemek için boş kutu yaratmak.
+def patched_forward(self, sample, timestep, encoder_hidden_states, class_labels=None, *args, **kwargs):
+    # 1. added_cond_kwargs KONTROLÜ (Hatanın Sebebi)
+    added_cond_kwargs = kwargs.get("added_cond_kwargs", None)
+    
+    # Eğer yoksa veya None ise, boş bir sözlük yarat
+    if added_cond_kwargs is None:
+        added_cond_kwargs = {}
+    
+    # 2. EKSİK VERİLERİ DOLDUR (Garanti olsun)
+    if "text_embeds" not in added_cond_kwargs:
+        # 1280 boyutunda boş veri (SDXL Standardı)
+        added_cond_kwargs["text_embeds"] = torch.zeros((1, 1280), device=sample.device, dtype=sample.dtype)
+    
+    if "time_ids" not in added_cond_kwargs:
+        added_cond_kwargs["time_ids"] = torch.zeros((1, 6), device=sample.device, dtype=sample.dtype)
+        
+    # Sözlüğü kwargs içine geri koy
+    kwargs["added_cond_kwargs"] = added_cond_kwargs
+
+    # 3. 3072 -> 2048 KESİCİ (Ne olur ne olmaz, kalsın)
+    if encoder_hidden_states is not None:
+        if encoder_hidden_states.shape[-1] > 2048:
+            encoder_hidden_states = encoder_hidden_states[:, :, :2048]
+        elif encoder_hidden_states.shape[-1] < 2048:
+            pad = 2048 - encoder_hidden_states.shape[-1]
+            encoder_hidden_states = torch.nn.functional.pad(encoder_hidden_states, (0, pad))
+
+    # Orijinal fonksiyonu çağır (Artık elinde dolu kutu var, patlamaz)
+    return self.original_forward(sample, timestep, encoder_hidden_states, class_labels, *args, **kwargs)
 
 def load_model():
     global MODEL_LOADED, model
@@ -63,6 +97,13 @@ def load_model():
     garm_path = "unet_garm/unet" if os.path.exists("unet_garm/unet") else "unet_garm"
     unet_encoder = UNetGarm.from_pretrained(garm_path, torch_dtype=torch.float16, use_safetensors=True).to(device)
 
+    # --- AMELİYAT BAŞLIYOR ---
+    print("💉 UNet Encoder yamalanıyor (NoneType Fix)...")
+    unet_encoder.original_forward = unet_encoder.forward
+    unet_encoder.forward = types.MethodType(patched_forward, unet_encoder)
+    print("✅ Yama uygulandı.")
+    # -------------------------
+
     pipe = StableDiffusionXLInpaintPipeline.from_pretrained(
         "ckpt", unet=unet, unet_encoder=unet_encoder, image_encoder=image_encoder,
         feature_extractor=feature_extractor, text_encoder=text_encoder, text_encoder_2=text_encoder_2,
@@ -75,7 +116,7 @@ def load_model():
 
     model = {"pipe": pipe, "parsing": parsing, "openpose": openpose, "device": device}
     MODEL_LOADED = True
-    print("✅ Sistem Hazır! (v54 - App.py Logic)")
+    print("✅ Sistem Hazır! (v55)")
     return model
 
 def b64_to_img(b64):
@@ -98,14 +139,13 @@ def handler(job):
     gc.collect()
     torch.cuda.empty_cache()
     
-    print("🚀 HANDLER İŞ ALDI (v54)")
+    print("🚀 HANDLER İŞ ALDI (v55)")
     data = job["input"]
     try:
         mdl = load_model()
         human = smart_resize(b64_to_img(data["human_image"]), 768, 1024)
         garment = smart_resize(b64_to_img(data["garment_image"]), 768, 1024)
         
-        # Kullanıcı description göndermezse varsayılan kullan
         garment_des = data.get("description", "clothes") 
         steps = data.get("steps", 30)
         seed = data.get("seed", 42)
@@ -114,7 +154,6 @@ def handler(job):
         pipe = mdl["pipe"]
 
         with torch.no_grad():
-            # 1. Parsing & Masking
             try:
                 parse_pil = mdl["parsing"](human)
                 parse_arr = np.array(parse_pil)
@@ -124,7 +163,6 @@ def handler(job):
             except:
                 mask_image = Image.new("L", human.size, 0)
                 
-            # 2. OpenPose
             human_cv = np.array(human)[:, :, ::-1].copy() 
             pose = None
             try:
@@ -137,40 +175,18 @@ def handler(job):
             pose_tensor = transforms.ToTensor()(pose).unsqueeze(0).to(device, torch.float16)
             cloth_tensor = transforms.ToTensor()(garment).unsqueeze(0).to(device, torch.float16)
 
-            # --- 3. PROMPT ENCODING (APP.PY MANTIĞI BURADA) ---
-            # İşte sihirli kısım burası. Embeddings'i biz hazırlıyoruz.
-            
+            # PROMPT ENCODING (v54'ten devam)
             prompt = "model is wearing " + garment_des
             negative_prompt = "monochrome, lowres, bad anatomy, worst quality, low quality"
             
-            # Ana Sahne için Encoding
-            (
-                prompt_embeds,
-                negative_prompt_embeds,
-                pooled_prompt_embeds,
-                negative_pooled_prompt_embeds,
-            ) = pipe.encode_prompt(
-                prompt,
-                num_images_per_prompt=1,
-                do_classifier_free_guidance=True,
-                negative_prompt=negative_prompt,
+            (prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds) = pipe.encode_prompt(
+                prompt, num_images_per_prompt=1, do_classifier_free_guidance=True, negative_prompt=negative_prompt,
             )
 
-            # Kıyafet için Encoding (Bu kısım app.py'de 'prompt_embeds_c' olarak geçiyor)
             prompt_cloth = "a photo of " + garment_des
-            (
-                prompt_embeds_c,
-                _,
-                _,
-                _,
-            ) = pipe.encode_prompt(
-                prompt_cloth,
-                num_images_per_prompt=1,
-                do_classifier_free_guidance=False,
-                negative_prompt=negative_prompt,
+            (prompt_embeds_c, _, _, _) = pipe.encode_prompt(
+                prompt_cloth, num_images_per_prompt=1, do_classifier_free_guidance=False, negative_prompt=negative_prompt,
             )
-            
-            # ----------------------------------------------------
             
             result = pipe(
                 prompt_embeds=prompt_embeds,
@@ -182,7 +198,7 @@ def handler(job):
                 generator=torch.Generator(device).manual_seed(seed),
                 strength=1.0,
                 pose_img=pose_tensor,
-                text_embeds_cloth=prompt_embeds_c, # <-- İşte 2048/1280 karmaşasını çözen anahtar
+                text_embeds_cloth=prompt_embeds_c,
                 cloth=cloth_tensor,
                 mask_image=mask_image,
                 image=human, 
