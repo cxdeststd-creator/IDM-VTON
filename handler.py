@@ -6,7 +6,7 @@ import torch
 import shutil
 import sys
 import gc
-import types # Monkey Patch için gerekli
+import types
 from PIL import Image, ImageOps
 import runpod
 from torchvision import transforms 
@@ -16,7 +16,6 @@ from huggingface_hub import snapshot_download
 print("⬇️ Sistem Hazırlanıyor...")
 torch.cuda.empty_cache()
 
-# Dosyaları indir
 snapshot_download(repo_id="yisol/IDM-VTON", local_dir="ckpt", allow_patterns=["*.py", "unet/*", "tokenizer/**", "tokenizer_2/**", "*.json", "*.txt"], local_dir_use_symlinks=True)
 
 # --- IMPORTLAR ---
@@ -34,29 +33,22 @@ from src.unet_hacked_garmnet import UNet2DConditionModel as UNetGarm
 MODEL_LOADED = False
 model = {}
 
-# --- 🧠 BEYİN AMELİYATI (Monkey Patch v2) ---
-# Bu fonksiyon, orijinal fonksiyonun yerine geçecek.
-# Amacı: "NoneType" hatasını engellemek için boş kutu yaratmak.
+# --- 🧠 MONKEY PATCH (v55'ten devam - Hayat Kurtarıcı) ---
 def patched_forward(self, sample, timestep, encoder_hidden_states, class_labels=None, *args, **kwargs):
-    # 1. added_cond_kwargs KONTROLÜ (Hatanın Sebebi)
+    # 1. NoneType Hatası Önleyici
     added_cond_kwargs = kwargs.get("added_cond_kwargs", None)
-    
-    # Eğer yoksa veya None ise, boş bir sözlük yarat
     if added_cond_kwargs is None:
         added_cond_kwargs = {}
     
-    # 2. EKSİK VERİLERİ DOLDUR (Garanti olsun)
+    # 2. Eksik Veri Doldurucu
     if "text_embeds" not in added_cond_kwargs:
-        # 1280 boyutunda boş veri (SDXL Standardı)
         added_cond_kwargs["text_embeds"] = torch.zeros((1, 1280), device=sample.device, dtype=sample.dtype)
-    
     if "time_ids" not in added_cond_kwargs:
         added_cond_kwargs["time_ids"] = torch.zeros((1, 6), device=sample.device, dtype=sample.dtype)
         
-    # Sözlüğü kwargs içine geri koy
     kwargs["added_cond_kwargs"] = added_cond_kwargs
 
-    # 3. 3072 -> 2048 KESİCİ (Ne olur ne olmaz, kalsın)
+    # 3. Boyut Kesici (Safety Net)
     if encoder_hidden_states is not None:
         if encoder_hidden_states.shape[-1] > 2048:
             encoder_hidden_states = encoder_hidden_states[:, :, :2048]
@@ -64,7 +56,6 @@ def patched_forward(self, sample, timestep, encoder_hidden_states, class_labels=
             pad = 2048 - encoder_hidden_states.shape[-1]
             encoder_hidden_states = torch.nn.functional.pad(encoder_hidden_states, (0, pad))
 
-    # Orijinal fonksiyonu çağır (Artık elinde dolu kutu var, patlamaz)
     return self.original_forward(sample, timestep, encoder_hidden_states, class_labels, *args, **kwargs)
 
 def load_model():
@@ -97,12 +88,10 @@ def load_model():
     garm_path = "unet_garm/unet" if os.path.exists("unet_garm/unet") else "unet_garm"
     unet_encoder = UNetGarm.from_pretrained(garm_path, torch_dtype=torch.float16, use_safetensors=True).to(device)
 
-    # --- AMELİYAT BAŞLIYOR ---
-    print("💉 UNet Encoder yamalanıyor (NoneType Fix)...")
+    # --- YAMA UYGULAMA ---
     unet_encoder.original_forward = unet_encoder.forward
     unet_encoder.forward = types.MethodType(patched_forward, unet_encoder)
-    print("✅ Yama uygulandı.")
-    # -------------------------
+    # ---------------------
 
     pipe = StableDiffusionXLInpaintPipeline.from_pretrained(
         "ckpt", unet=unet, unet_encoder=unet_encoder, image_encoder=image_encoder,
@@ -116,7 +105,7 @@ def load_model():
 
     model = {"pipe": pipe, "parsing": parsing, "openpose": openpose, "device": device}
     MODEL_LOADED = True
-    print("✅ Sistem Hazır! (v55)")
+    print("✅ Sistem Hazır! (v56)")
     return model
 
 def b64_to_img(b64):
@@ -139,13 +128,12 @@ def handler(job):
     gc.collect()
     torch.cuda.empty_cache()
     
-    print("🚀 HANDLER İŞ ALDI (v55)")
+    print("🚀 HANDLER İŞ ALDI (v56)")
     data = job["input"]
     try:
         mdl = load_model()
         human = smart_resize(b64_to_img(data["human_image"]), 768, 1024)
         garment = smart_resize(b64_to_img(data["garment_image"]), 768, 1024)
-        
         garment_des = data.get("description", "clothes") 
         steps = data.get("steps", 30)
         seed = data.get("seed", 42)
@@ -175,7 +163,6 @@ def handler(job):
             pose_tensor = transforms.ToTensor()(pose).unsqueeze(0).to(device, torch.float16)
             cloth_tensor = transforms.ToTensor()(garment).unsqueeze(0).to(device, torch.float16)
 
-            # PROMPT ENCODING (v54'ten devam)
             prompt = "model is wearing " + garment_des
             negative_prompt = "monochrome, lowres, bad anatomy, worst quality, low quality"
             
@@ -188,7 +175,11 @@ def handler(job):
                 prompt_cloth, num_images_per_prompt=1, do_classifier_free_guidance=False, negative_prompt=negative_prompt,
             )
             
-            result = pipe(
+            # --- FİNAL ÇIKIŞ (HATA BURADAYDI) ---
+            # Pipe bize (images_list, ...) şeklinde bir TUPLE dönüyor.
+            # O yüzden .images[0] değil, [0][0] demeliyiz.
+            
+            output_tuple = pipe(
                 prompt_embeds=prompt_embeds,
                 negative_prompt_embeds=negative_prompt_embeds,
                 pooled_prompt_embeds=pooled_prompt_embeds,
@@ -205,10 +196,13 @@ def handler(job):
                 height=1024,
                 width=768,
                 ip_adapter_image=garment,
-            ).images[0]
+            )
+            
+            # Çözüm Burada:
+            final_image = output_tuple[0][0]
         
         torch.cuda.empty_cache()
-        return {"output": img_to_b64(result)}
+        return {"output": img_to_b64(final_image)}
         
     except Exception as e:
         import traceback
