@@ -6,17 +6,30 @@ import torch
 import shutil
 import sys
 import gc
-import types
+# import types <-- ARTIK YOK! Yama yapmıyoruz.
 from PIL import Image, ImageOps, ImageDraw
 import runpod
 from torchvision import transforms 
 from huggingface_hub import snapshot_download
 
-# --- HAZIRLIK ---
-print("⬇️ Sistem Hazırlanıyor...")
+# --- 1. AŞAMA: TAM TEMİZLİK VE HAZIRLIK ---
+print("🧹 Sistem Temizleniyor (Fabrika Ayarları)...")
 torch.cuda.empty_cache()
+gc.collect()
 
-snapshot_download(repo_id="yisol/IDM-VTON", local_dir="ckpt", allow_patterns=["*.py", "unet/*", "tokenizer/**", "tokenizer_2/**", "*.json", "*.txt"], local_dir_use_symlinks=True)
+# Eski, bozuk, yamalı src klasörü varsa sil. Tertipler insin.
+if os.path.exists("src"):
+    shutil.rmtree("src")
+    print("🗑️ Eski 'src' klasörü silindi.")
+
+print("⬇️ Orijinal Dosyalar İndiriliyor...")
+# UNet ve Python scriptlerini taze indir
+snapshot_download(repo_id="yisol/IDM-VTON", local_dir="ckpt", allow_patterns=["src/*", "unet/*", "tokenizer/**", "tokenizer_2/**", "*.json", "*.txt"], local_dir_use_symlinks=True)
+
+# src klasörünü ana dizine taşı (Importlar için şart)
+if os.path.exists("ckpt/src") and not os.path.exists("src"):
+    shutil.move("ckpt/src", "src")
+    print("✅ 'src' klasörü yerine taşındı.")
 
 # --- IMPORTLAR ---
 sys.path.append(os.getcwd())
@@ -24,6 +37,8 @@ try:
     from transformers import (CLIPImageProcessor, CLIPVisionModelWithProjection, CLIPTextModel, CLIPTextModelWithProjection, AutoTokenizer)
 except: pass
 
+# ARTIK ORİJİNAL DOSYALARI KULLANIYORUZ
+# (Hacked isimli olsalar da artık içleri temiz)
 from preprocess.humanparsing.run_parsing import Parsing
 from preprocess.openpose.run_openpose import OpenPose
 from src.tryon_pipeline import StableDiffusionXLInpaintPipeline
@@ -33,33 +48,13 @@ from src.unet_hacked_garmnet import UNet2DConditionModel as UNetGarm
 MODEL_LOADED = False
 model = {}
 
-# --- MONKEY PATCH (v56 Aynen Korunuyor) ---
-def patched_forward(self, sample, timestep, encoder_hidden_states, class_labels=None, *args, **kwargs):
-    added_cond_kwargs = kwargs.get("added_cond_kwargs", None)
-    if added_cond_kwargs is None:
-        added_cond_kwargs = {}
-    
-    if "text_embeds" not in added_cond_kwargs:
-        added_cond_kwargs["text_embeds"] = torch.zeros((1, 1280), device=sample.device, dtype=sample.dtype)
-    if "time_ids" not in added_cond_kwargs:
-        added_cond_kwargs["time_ids"] = torch.zeros((1, 6), device=sample.device, dtype=sample.dtype)
-        
-    kwargs["added_cond_kwargs"] = added_cond_kwargs
-
-    if encoder_hidden_states is not None:
-        if encoder_hidden_states.shape[-1] > 2048:
-            encoder_hidden_states = encoder_hidden_states[:, :, :2048]
-        elif encoder_hidden_states.shape[-1] < 2048:
-            pad = 2048 - encoder_hidden_states.shape[-1]
-            encoder_hidden_states = torch.nn.functional.pad(encoder_hidden_states, (0, pad))
-
-    return self.original_forward(sample, timestep, encoder_hidden_states, class_labels, *args, **kwargs)
+# --- ARTIK MONKEY PATCH YOK! MODEL ORİJİNAL HALİYLE ÇALIŞACAK ---
 
 def load_model():
     global MODEL_LOADED, model
     if MODEL_LOADED: return model
 
-    print("🚀 Modeller Yükleniyor...")
+    print("🚀 Modeller Yükleniyor (Saf Mod)...")
     snapshot_download(repo_id="yisol/IDM-VTON", local_dir="ckpt", allow_patterns=["text_encoder/*", "text_encoder_2/*", "vae/*", "scheduler/*", "humanparsing/*", "densepose/*", "openpose/*"], local_dir_use_symlinks=True)
     snapshot_download(repo_id="laion/CLIP-ViT-H-14-laion2B-s32B-b79K", local_dir="image_encoder", allow_patterns=["*.json", "*.safetensors", "*.txt"], local_dir_use_symlinks=True)
     snapshot_download(repo_id="stabilityai/stable-diffusion-xl-base-1.0", local_dir="unet_garm", allow_patterns=["unet/*", "*.json"], local_dir_use_symlinks=True)
@@ -81,13 +76,12 @@ def load_model():
     image_encoder = CLIPVisionModelWithProjection.from_pretrained("image_encoder", torch_dtype=torch.float16).to(device)
     feature_extractor = CLIPImageProcessor.from_pretrained("image_encoder", torch_dtype=torch.float16)
     
+    # Orijinal UNet'leri yüklüyoruz
     unet = UNet2DConditionModel.from_pretrained("ckpt", subfolder="unet", torch_dtype=torch.float16).to(device)
     garm_path = "unet_garm/unet" if os.path.exists("unet_garm/unet") else "unet_garm"
     unet_encoder = UNetGarm.from_pretrained(garm_path, torch_dtype=torch.float16, use_safetensors=True).to(device)
 
-    # Yama Uygulama
-    unet_encoder.original_forward = unet_encoder.forward
-    unet_encoder.forward = types.MethodType(patched_forward, unet_encoder)
+    # --- YAMA KISMI SİLİNDİ ---
 
     pipe = StableDiffusionXLInpaintPipeline.from_pretrained(
         "ckpt", unet=unet, unet_encoder=unet_encoder, image_encoder=image_encoder,
@@ -101,7 +95,7 @@ def load_model():
 
     model = {"pipe": pipe, "parsing": parsing, "openpose": openpose, "device": device}
     MODEL_LOADED = True
-    print("✅ Sistem Hazır! (v57)")
+    print("✅ Sistem Hazır! (v58)")
     return model
 
 def b64_to_img(b64):
@@ -124,7 +118,7 @@ def handler(job):
     gc.collect()
     torch.cuda.empty_cache()
     
-    print("🚀 HANDLER İŞ ALDI (v57)")
+    print("🚀 HANDLER İŞ ALDI (v58 - ORİJİNAL MOD)")
     data = job["input"]
     try:
         mdl = load_model()
@@ -138,35 +132,20 @@ def handler(job):
         pipe = mdl["pipe"]
 
         with torch.no_grad():
-            # --- 1. MASKE OLUŞTURMA (HATA BURADAYDI) ---
+            # 1. Maske (Parsing Resize Fix - Bu kalmalı, faydalı)
             try:
-                # İŞTE ÇÖZÜM: Parsing modeli 768x1024 sevmez, 384x512 sever.
-                # Önce küçültüp taratıyoruz.
                 human_small = human.resize((384, 512))
                 parse_pil = mdl["parsing"](human_small)
-                
-                # Çıkan sonucu tekrar büyütüyoruz.
                 parse_pil = parse_pil.resize((768, 1024), Image.NEAREST)
-                
                 parse_arr = np.array(parse_pil)
                 if parse_arr.ndim > 2: parse_arr = parse_arr.squeeze()
-                
-                # 4: Üst Gövde, 6: Elbise, 7: Ceket
                 mask_arr = (parse_arr == 4) | (parse_arr == 6) | (parse_arr == 7)
-                
-                # Eğer maske boşsa (hiçbir şey bulamadıysa) - FAILSAFE
-                if np.sum(mask_arr) < 100:
-                    print("⚠️ Uyarı: Vücut bulunamadı, varsayılan kutu maske kullanılıyor.")
-                    raise Exception("Empty Mask")
-                    
+                if np.sum(mask_arr) < 100: raise Exception("Empty Mask")
                 mask_image = Image.fromarray((mask_arr * 255).astype(np.uint8))
-                
-            except Exception as e:
-                # ACİL DURUM PLANI: Ortaya beyaz bir kare çiz ki kesin değişsin
-                print(f"⚠️ Maske Hatası: {e}. Fallback maske oluşturuluyor.")
+            except:
+                print("⚠️ Maske bulunamadı, fallback uygulanıyor.")
                 mask_image = Image.new("L", human.size, 0)
                 draw = ImageDraw.Draw(mask_image)
-                # Resmin ortasına büyük bir kutu çiz (Değişim garantili)
                 w, h = human.size
                 draw.rectangle([w*0.2, h*0.2, w*0.8, h*0.8], fill=255)
                 
@@ -183,7 +162,7 @@ def handler(job):
             pose_tensor = transforms.ToTensor()(pose).unsqueeze(0).to(device, torch.float16)
             cloth_tensor = transforms.ToTensor()(garment).unsqueeze(0).to(device, torch.float16)
 
-            # 3. Prompt Logic
+            # 3. Prompt Logic (App.py'den alınan doğru mantık)
             prompt = "model is wearing " + garment_des
             negative_prompt = "monochrome, lowres, bad anatomy, worst quality, low quality"
             
@@ -196,6 +175,7 @@ def handler(job):
                 prompt_cloth, num_images_per_prompt=1, do_classifier_free_guidance=False, negative_prompt=negative_prompt,
             )
             
+            # Pipeline Çalıştırma (Orijinal haliyle)
             output_tuple = pipe(
                 prompt_embeds=prompt_embeds,
                 negative_prompt_embeds=negative_prompt_embeds,
