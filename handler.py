@@ -7,7 +7,7 @@ import shutil
 import sys
 import gc
 import types
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageDraw
 import runpod
 from torchvision import transforms 
 from huggingface_hub import snapshot_download
@@ -33,14 +33,12 @@ from src.unet_hacked_garmnet import UNet2DConditionModel as UNetGarm
 MODEL_LOADED = False
 model = {}
 
-# --- 🧠 MONKEY PATCH (v55'ten devam - Hayat Kurtarıcı) ---
+# --- MONKEY PATCH (v56 Aynen Korunuyor) ---
 def patched_forward(self, sample, timestep, encoder_hidden_states, class_labels=None, *args, **kwargs):
-    # 1. NoneType Hatası Önleyici
     added_cond_kwargs = kwargs.get("added_cond_kwargs", None)
     if added_cond_kwargs is None:
         added_cond_kwargs = {}
     
-    # 2. Eksik Veri Doldurucu
     if "text_embeds" not in added_cond_kwargs:
         added_cond_kwargs["text_embeds"] = torch.zeros((1, 1280), device=sample.device, dtype=sample.dtype)
     if "time_ids" not in added_cond_kwargs:
@@ -48,7 +46,6 @@ def patched_forward(self, sample, timestep, encoder_hidden_states, class_labels=
         
     kwargs["added_cond_kwargs"] = added_cond_kwargs
 
-    # 3. Boyut Kesici (Safety Net)
     if encoder_hidden_states is not None:
         if encoder_hidden_states.shape[-1] > 2048:
             encoder_hidden_states = encoder_hidden_states[:, :, :2048]
@@ -88,10 +85,9 @@ def load_model():
     garm_path = "unet_garm/unet" if os.path.exists("unet_garm/unet") else "unet_garm"
     unet_encoder = UNetGarm.from_pretrained(garm_path, torch_dtype=torch.float16, use_safetensors=True).to(device)
 
-    # --- YAMA UYGULAMA ---
+    # Yama Uygulama
     unet_encoder.original_forward = unet_encoder.forward
     unet_encoder.forward = types.MethodType(patched_forward, unet_encoder)
-    # ---------------------
 
     pipe = StableDiffusionXLInpaintPipeline.from_pretrained(
         "ckpt", unet=unet, unet_encoder=unet_encoder, image_encoder=image_encoder,
@@ -105,7 +101,7 @@ def load_model():
 
     model = {"pipe": pipe, "parsing": parsing, "openpose": openpose, "device": device}
     MODEL_LOADED = True
-    print("✅ Sistem Hazır! (v56)")
+    print("✅ Sistem Hazır! (v57)")
     return model
 
 def b64_to_img(b64):
@@ -128,7 +124,7 @@ def handler(job):
     gc.collect()
     torch.cuda.empty_cache()
     
-    print("🚀 HANDLER İŞ ALDI (v56)")
+    print("🚀 HANDLER İŞ ALDI (v57)")
     data = job["input"]
     try:
         mdl = load_model()
@@ -142,15 +138,39 @@ def handler(job):
         pipe = mdl["pipe"]
 
         with torch.no_grad():
+            # --- 1. MASKE OLUŞTURMA (HATA BURADAYDI) ---
             try:
-                parse_pil = mdl["parsing"](human)
+                # İŞTE ÇÖZÜM: Parsing modeli 768x1024 sevmez, 384x512 sever.
+                # Önce küçültüp taratıyoruz.
+                human_small = human.resize((384, 512))
+                parse_pil = mdl["parsing"](human_small)
+                
+                # Çıkan sonucu tekrar büyütüyoruz.
+                parse_pil = parse_pil.resize((768, 1024), Image.NEAREST)
+                
                 parse_arr = np.array(parse_pil)
                 if parse_arr.ndim > 2: parse_arr = parse_arr.squeeze()
-                mask_arr = (parse_arr == 4) | (parse_arr == 6) | (parse_arr == 7)
-                mask_image = Image.fromarray((mask_arr * 255).astype(np.uint8))
-            except:
-                mask_image = Image.new("L", human.size, 0)
                 
+                # 4: Üst Gövde, 6: Elbise, 7: Ceket
+                mask_arr = (parse_arr == 4) | (parse_arr == 6) | (parse_arr == 7)
+                
+                # Eğer maske boşsa (hiçbir şey bulamadıysa) - FAILSAFE
+                if np.sum(mask_arr) < 100:
+                    print("⚠️ Uyarı: Vücut bulunamadı, varsayılan kutu maske kullanılıyor.")
+                    raise Exception("Empty Mask")
+                    
+                mask_image = Image.fromarray((mask_arr * 255).astype(np.uint8))
+                
+            except Exception as e:
+                # ACİL DURUM PLANI: Ortaya beyaz bir kare çiz ki kesin değişsin
+                print(f"⚠️ Maske Hatası: {e}. Fallback maske oluşturuluyor.")
+                mask_image = Image.new("L", human.size, 0)
+                draw = ImageDraw.Draw(mask_image)
+                # Resmin ortasına büyük bir kutu çiz (Değişim garantili)
+                w, h = human.size
+                draw.rectangle([w*0.2, h*0.2, w*0.8, h*0.8], fill=255)
+                
+            # 2. OpenPose
             human_cv = np.array(human)[:, :, ::-1].copy() 
             pose = None
             try:
@@ -163,6 +183,7 @@ def handler(job):
             pose_tensor = transforms.ToTensor()(pose).unsqueeze(0).to(device, torch.float16)
             cloth_tensor = transforms.ToTensor()(garment).unsqueeze(0).to(device, torch.float16)
 
+            # 3. Prompt Logic
             prompt = "model is wearing " + garment_des
             negative_prompt = "monochrome, lowres, bad anatomy, worst quality, low quality"
             
@@ -174,10 +195,6 @@ def handler(job):
             (prompt_embeds_c, _, _, _) = pipe.encode_prompt(
                 prompt_cloth, num_images_per_prompt=1, do_classifier_free_guidance=False, negative_prompt=negative_prompt,
             )
-            
-            # --- FİNAL ÇIKIŞ (HATA BURADAYDI) ---
-            # Pipe bize (images_list, ...) şeklinde bir TUPLE dönüyor.
-            # O yüzden .images[0] değil, [0][0] demeliyiz.
             
             output_tuple = pipe(
                 prompt_embeds=prompt_embeds,
@@ -198,7 +215,6 @@ def handler(job):
                 ip_adapter_image=garment,
             )
             
-            # Çözüm Burada:
             final_image = output_tuple[0][0]
         
         torch.cuda.empty_cache()
