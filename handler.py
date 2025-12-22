@@ -11,79 +11,78 @@ import runpod
 from torchvision import transforms 
 from huggingface_hub import snapshot_download
 
-# --- 1. DOSYA TAMİRİ (KESME ve BİÇME) ---
-def force_fix_file_with_slicer():
+# --- GÜVENLİ YAMALAMA (CRASH ÖNLEYİCİ) ---
+def safe_patch_file():
     target_file = "src/unet_hacked_garmnet.py"
     if not os.path.exists(target_file):
+        print("⚠️ Dosya yok, yama geçildi.")
         return
 
-    print("🔧 [v51] Dosya yamalanıyor (OTOMATİK BOYUTLANDIRICI)...")
-    with open(target_file, "r") as f:
-        lines = f.readlines()
+    try:
+        print("🔧 [v52] Dosya güvenli modda yamalanıyor...")
+        with open(target_file, "r") as f:
+            lines = f.readlines()
 
-    if any("FIXED_BY_GEMINI_V51" in line for line in lines):
-        return
+        if any("FIXED_BY_GEMINI_V52" in line for line in lines):
+            print("✅ Zaten yamalı.")
+            return
 
-    new_lines = []
-    fixed = False
-    search_text = 'if "text_embeds" not in added_cond_kwargs:'
-    
-    for line in lines:
-        if search_text in line and not fixed:
-            indent = line.split('if')[0]
-            new_lines.append(f'{indent}# FIXED_BY_GEMINI_V51 (THE SLICER)\n')
-            new_lines.append(f'{indent}if added_cond_kwargs is None: added_cond_kwargs = {{}}\n')
-            
-            # --- KRİTİK MÜDAHALE: ENCODER HIDDEN STATES ---
-            new_lines.append(f'{indent}if encoder_hidden_states is not None:\n')
-            new_lines.append(f'{indent}    curr_dim = encoder_hidden_states.shape[-1]\n')
-            
-            # DURUM 1: Veri ÇOK BÜYÜK (3072 geldiyse -> 2048'e KES)
-            new_lines.append(f'{indent}    if curr_dim > 2048:\n')
-            new_lines.append(f'{indent}        encoder_hidden_states = encoder_hidden_states[:, :, :2048]\n')
-            
-            # DURUM 2: Veri KÜÇÜK (640 geldiyse -> 2048'e DOLDUR)
-            new_lines.append(f'{indent}    elif curr_dim < 2048:\n')
-            new_lines.append(f'{indent}        pad = 2048 - curr_dim\n')
-            new_lines.append(f'{indent}        encoder_hidden_states = torch.nn.functional.pad(encoder_hidden_states, (0, pad))\n')
+        new_lines = []
+        fixed = False
+        search_text = 'if "text_embeds" not in added_cond_kwargs:'
+        
+        for line in lines:
+            if search_text in line and not fixed:
+                # Mevcut girintiyi (indentation) kopyala
+                indent = line.split('if')[0]
+                
+                # Yamayı ekle (Python syntax kurallarına uygun)
+                new_lines.append(f'{indent}# FIXED_BY_GEMINI_V52\n')
+                new_lines.append(f'{indent}if added_cond_kwargs is None: added_cond_kwargs = {{}}\n')
+                
+                # --- SLICER & PADDER (3072 -> 2048) ---
+                new_lines.append(f'{indent}if encoder_hidden_states is not None:\n')
+                new_lines.append(f'{indent}    curr_dim = encoder_hidden_states.shape[-1]\n')
+                # Fazla gelirse kes (3072 -> 2048)
+                new_lines.append(f'{indent}    if curr_dim > 2048:\n')
+                new_lines.append(f'{indent}        encoder_hidden_states = encoder_hidden_states[:, :, :2048]\n')
+                # Az gelirse doldur (640 -> 2048)
+                new_lines.append(f'{indent}    elif curr_dim < 2048:\n')
+                new_lines.append(f'{indent}        pad_amt = 2048 - curr_dim\n')
+                new_lines.append(f'{indent}        encoder_hidden_states = torch.nn.functional.pad(encoder_hidden_states, (0, pad_amt))\n')
 
-            # TEXT EMBEDS (Bunu da garantiye alıp 1280 yapıyoruz)
-            new_lines.append(f'{indent}if "text_embeds" not in added_cond_kwargs:\n')
-            new_lines.append(f'{indent}    added_cond_kwargs["text_embeds"] = torch.zeros((1, 1280), device=sample.device, dtype=sample.dtype)\n')
+                # Eksik Text Embeds (Projection Layer için 1280)
+                new_lines.append(f'{indent}if "text_embeds" not in added_cond_kwargs:\n')
+                new_lines.append(f'{indent}    added_cond_kwargs["text_embeds"] = torch.zeros((1, 1280), device=sample.device, dtype=sample.dtype)\n')
+                
+                new_lines.append(f'{indent}if "time_ids" not in added_cond_kwargs:\n')
+                new_lines.append(f'{indent}    added_cond_kwargs["time_ids"] = torch.zeros((1, 6), device=sample.device, dtype=sample.dtype)\n')
+                
+                fixed = True
+            new_lines.append(line)
             
-            new_lines.append(f'{indent}if "time_ids" not in added_cond_kwargs:\n')
-            new_lines.append(f'{indent}    added_cond_kwargs["time_ids"] = torch.zeros((1, 6), device=sample.device, dtype=sample.dtype)\n')
-            
-            fixed = True
-        new_lines.append(line)
-            
-    if fixed:
         with open(target_file, "w") as f:
             f.writelines(new_lines)
-        print("✅ Dosya başarıyla kaydedildi (Slicer Aktif).")
+        print("✅ Yama başarıyla uygulandı.")
+        
+    except Exception as e:
+        print(f"❌ YAMA HATASI (Kod çalışmaya devam edecek): {e}")
 
-# --- 2. HAZIRLIK ---
-print("⬇️ Sistem Hazırlanıyor...")
+# --- HAZIRLIK ---
+print("⬇️ Başlatılıyor...")
 torch.cuda.empty_cache()
 
+# Dosyaları indir
 snapshot_download(repo_id="yisol/IDM-VTON", local_dir="ckpt", allow_patterns=["*.py", "unet/*", "tokenizer/**", "tokenizer_2/**", "*.json", "*.txt"], local_dir_use_symlinks=True)
 
 # Yamayı uygula
-force_fix_file_with_slicer()
+safe_patch_file()
 
-# --- 3. IMPORTLAR ---
+# --- IMPORTLAR ---
 sys.path.append(os.getcwd())
-
 try:
-    from transformers import (
-        CLIPImageProcessor, 
-        CLIPVisionModelWithProjection,
-        CLIPTextModel,
-        CLIPTextModelWithProjection,
-        AutoTokenizer
-    )
-except ImportError:
-    pass
+    from transformers import (CLIPImageProcessor, CLIPVisionModelWithProjection, CLIPTextModel, CLIPTextModelWithProjection, AutoTokenizer)
+except: pass
 
 from preprocess.humanparsing.run_parsing import Parsing
 from preprocess.openpose.run_openpose import OpenPose
@@ -121,7 +120,6 @@ def load_model():
     feature_extractor = CLIPImageProcessor.from_pretrained("image_encoder", torch_dtype=torch.float16)
     
     unet = UNet2DConditionModel.from_pretrained("ckpt", subfolder="unet", torch_dtype=torch.float16).to(device)
-    
     garm_path = "unet_garm/unet" if os.path.exists("unet_garm/unet") else "unet_garm"
     unet_encoder = UNetGarm.from_pretrained(garm_path, torch_dtype=torch.float16, use_safetensors=True).to(device)
 
@@ -137,7 +135,7 @@ def load_model():
 
     model = {"pipe": pipe, "parsing": parsing, "openpose": openpose, "device": device}
     MODEL_LOADED = True
-    print("✅ Sistem Hazır! (v51)")
+    print("✅ Sistem Hazır! (v52)")
     return model
 
 def b64_to_img(b64):
@@ -160,7 +158,7 @@ def handler(job):
     gc.collect()
     torch.cuda.empty_cache()
     
-    print("🚀 HANDLER ÇALIŞIYOR (v51)")
+    print("🚀 HANDLER İŞ ALDI (v52)")
     data = job["input"]
     try:
         mdl = load_model()
@@ -177,4 +175,34 @@ def handler(job):
                 mask_arr = (parse_arr == 4) | (parse_arr == 6) | (parse_arr == 7)
                 mask_image = Image.fromarray((mask_arr * 255).astype(np.uint8))
             except:
-                mask_image = Image.new("L", human.
+                mask_image = Image.new("L", human.size, 0)
+                
+            human_cv = np.array(human)[:, :, ::-1].copy() 
+            pose = None
+            try:
+                raw = mdl["openpose"](human_cv)
+                if isinstance(raw, dict) and "pose_img" in raw: pose = raw["pose_img"]
+                elif isinstance(raw, Image.Image): pose = raw
+            except: pass
+            if pose is None: pose = Image.new("RGB", human.size, (0,0,0))
+            
+            device = mdl["device"]
+            pose_tensor = transforms.ToTensor()(pose).unsqueeze(0).to(device, torch.float16)
+            cloth_tensor = transforms.ToTensor()(garment).unsqueeze(0).to(device, torch.float16)
+            
+            result = mdl["pipe"](
+                prompt="clothes", image=human, mask_image=mask_image, ip_adapter_image=garment, 
+                cloth=cloth_tensor, pose_img=pose_tensor, num_inference_steps=steps, guidance_scale=2.0,
+                generator=torch.Generator(device).manual_seed(seed), height=1024, width=768
+            ).images[0]
+        
+        torch.cuda.empty_cache()
+        return {"output": img_to_b64(result)}
+        
+    except Exception as e:
+        import traceback
+        trace = traceback.format_exc()
+        return {"error": str(e), "trace": trace}
+
+print("🔌 RunPod Başlatılıyor...")
+runpod.serverless.start({"handler": handler})
