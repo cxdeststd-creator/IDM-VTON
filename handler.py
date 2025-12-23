@@ -1,209 +1,177 @@
+import sys
 import os
 import io
 import base64
 import numpy as np
 import torch
-import shutil
-import sys
-import gc
-# import types <-- ARTIK YOK! Yama yapmıyoruz.
-from PIL import Image, ImageOps, ImageDraw
 import runpod
-from torchvision import transforms 
+from PIL import Image, ImageOps
+from torchvision import transforms
 from huggingface_hub import snapshot_download
 
-# --- 1. AŞAMA: TAM TEMİZLİK VE HAZIRLIK ---
-print("🧹 Sistem Temizleniyor (Fabrika Ayarları)...")
-torch.cuda.empty_cache()
-gc.collect()
-
-# Eski, bozuk, yamalı src klasörü varsa sil. Tertipler insin.
-if os.path.exists("src"):
-    shutil.rmtree("src")
-    print("🗑️ Eski 'src' klasörü silindi.")
-
-print("⬇️ Orijinal Dosyalar İndiriliyor...")
-# UNet ve Python scriptlerini taze indir
-snapshot_download(repo_id="yisol/IDM-VTON", local_dir="ckpt", allow_patterns=["src/*", "unet/*", "tokenizer/**", "tokenizer_2/**", "*.json", "*.txt"], local_dir_use_symlinks=True)
-
-# src klasörünü ana dizine taşı (Importlar için şart)
-if os.path.exists("ckpt/src") and not os.path.exists("src"):
-    shutil.move("ckpt/src", "src")
-    print("✅ 'src' klasörü yerine taşındı.")
-
-# --- IMPORTLAR ---
-sys.path.append(os.getcwd())
+# --- GEREKLİ IMPORTLAR (shinsanghooon imajına göre) ---
 try:
-    from transformers import (CLIPImageProcessor, CLIPVisionModelWithProjection, CLIPTextModel, CLIPTextModelWithProjection, AutoTokenizer)
-except: pass
+    sys.path.append(os.getcwd()) # Ana dizini path'e ekle
+    from src.tryon_pipeline import StableDiffusionXLInpaintPipeline as TryonPipeline
+    from src.unet_hacked_garmnet import UNet2DConditionModel as UNet2DConditionModel_ref
+    from src.unet_hacked_tryon import UNet2DConditionModel
+    from preprocess.humanparsing.run_parsing import Parsing
+    from preprocess.openpose.run_openpose import OpenPose
+    from detectron2.data.detection_utils import convert_PIL_to_numpy, _apply_exif_orientation
+    import apply_net
+    from transformers import (
+        CLIPImageProcessor, CLIPVisionModelWithProjection,
+        CLIPTextModel, CLIPTextModelWithProjection, AutoTokenizer
+    )
+    from diffusers import DDPMScheduler, AutoencoderKL
+except ImportError as e:
+    print(f"⚠️ İçe aktarma uyarısı (Normal olabilir): {e}")
 
-# ARTIK ORİJİNAL DOSYALARI KULLANIYORUZ
-# (Hacked isimli olsalar da artık içleri temiz)
-from preprocess.humanparsing.run_parsing import Parsing
-from preprocess.openpose.run_openpose import OpenPose
-from src.tryon_pipeline import StableDiffusionXLInpaintPipeline
-from src.unet_hacked_tryon import UNet2DConditionModel
-from src.unet_hacked_garmnet import UNet2DConditionModel as UNetGarm
-
-MODEL_LOADED = False
-model = {}
-
-# --- ARTIK MONKEY PATCH YOK! MODEL ORİJİNAL HALİYLE ÇALIŞACAK ---
+# --- GLOBAL MODEL ---
+MODEL = None
 
 def load_model():
-    global MODEL_LOADED, model
-    if MODEL_LOADED: return model
+    global MODEL
+    if MODEL is not None:
+        return MODEL
 
-    print("🚀 Modeller Yükleniyor (Saf Mod)...")
-    snapshot_download(repo_id="yisol/IDM-VTON", local_dir="ckpt", allow_patterns=["text_encoder/*", "text_encoder_2/*", "vae/*", "scheduler/*", "humanparsing/*", "densepose/*", "openpose/*"], local_dir_use_symlinks=True)
-    snapshot_download(repo_id="laion/CLIP-ViT-H-14-laion2B-s32B-b79K", local_dir="image_encoder", allow_patterns=["*.json", "*.safetensors", "*.txt"], local_dir_use_symlinks=True)
-    snapshot_download(repo_id="stabilityai/stable-diffusion-xl-base-1.0", local_dir="unet_garm", allow_patterns=["unet/*", "*.json"], local_dir_use_symlinks=True)
-
-    src_pose = "ckpt/openpose/ckpts/body_pose_model.pth"
-    dst_pose = "preprocess/openpose/ckpts/body_pose_model.pth"
-    if os.path.exists(src_pose) and not os.path.exists(dst_pose):
-        os.makedirs(os.path.dirname(dst_pose), exist_ok=True)
-        try: shutil.copy(src_pose, dst_pose)
-        except: pass
+    print("🚀 Modeller Yükleniyor...")
+    base_path = 'ckpt' # İmaj içindeki model yolu
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
-    tokenizer = AutoTokenizer.from_pretrained("ckpt", subfolder="tokenizer", use_fast=False)
-    tokenizer_2 = AutoTokenizer.from_pretrained("ckpt", subfolder="tokenizer_2", use_fast=False)
+    # UNet ve Bileşenler
+    unet = UNet2DConditionModel.from_pretrained(base_path, subfolder="unet", torch_dtype=torch.float16)
+    tokenizer_one = AutoTokenizer.from_pretrained(base_path, subfolder="tokenizer", use_fast=False)
+    tokenizer_two = AutoTokenizer.from_pretrained(base_path, subfolder="tokenizer_2", use_fast=False)
+    noise_scheduler = DDPMScheduler.from_pretrained(base_path, subfolder="scheduler")
+    text_encoder_one = CLIPTextModel.from_pretrained(base_path, subfolder="text_encoder", torch_dtype=torch.float16)
+    text_encoder_two = CLIPTextModelWithProjection.from_pretrained(base_path, subfolder="text_encoder_2", torch_dtype=torch.float16)
+    image_encoder = CLIPVisionModelWithProjection.from_pretrained(base_path, subfolder="image_encoder", torch_dtype=torch.float16)
+    vae = AutoencoderKL.from_pretrained(base_path, subfolder="vae", torch_dtype=torch.float16)
+    UNet_Encoder = UNet2DConditionModel_ref.from_pretrained(base_path, subfolder="unet_encoder", torch_dtype=torch.float16)
+
+    # Yardımcı Modeller (Parsing ve Skeleton için)
+    parsing_model = Parsing(0)
+    # OpenPose yerine DensePose kullanacağız ama nesnesi dursun
+    openpose_model = OpenPose(0) 
+
+    # Encoder'ları GPU'ya al (Ana model CPU offload ile yönetilecek)
+    UNet_Encoder.to(device)
+    image_encoder.to(device)
     
-    text_encoder = CLIPTextModel.from_pretrained("ckpt", subfolder="text_encoder", torch_dtype=torch.float16).to(device)
-    text_encoder_2 = CLIPTextModelWithProjection.from_pretrained("ckpt", subfolder="text_encoder_2", torch_dtype=torch.float16).to(device)
-    image_encoder = CLIPVisionModelWithProjection.from_pretrained("image_encoder", torch_dtype=torch.float16).to(device)
-    feature_extractor = CLIPImageProcessor.from_pretrained("image_encoder", torch_dtype=torch.float16)
-    
-    # Orijinal UNet'leri yüklüyoruz
-    unet = UNet2DConditionModel.from_pretrained("ckpt", subfolder="unet", torch_dtype=torch.float16).to(device)
-    garm_path = "unet_garm/unet" if os.path.exists("unet_garm/unet") else "unet_garm"
-    unet_encoder = UNetGarm.from_pretrained(garm_path, torch_dtype=torch.float16, use_safetensors=True).to(device)
+    # Pipeline Oluştur
+    pipe = TryonPipeline.from_pretrained(
+        base_path,
+        unet=unet,
+        vae=vae,
+        feature_extractor=CLIPImageProcessor(),
+        text_encoder=text_encoder_one,
+        text_encoder_2=text_encoder_two,
+        tokenizer=tokenizer_one,
+        tokenizer_2=tokenizer_two,
+        scheduler=noise_scheduler,
+        image_encoder=image_encoder,
+        torch_dtype=torch.float16,
+    )
+    pipe.unet_encoder = UNet_Encoder
 
-    # --- YAMA KISMI SİLİNDİ ---
+    # --- KRİTİK BELLEK AYARLARI (OOM FİX) ---
+    # Bu iki satır olmazsa 24GB kartta PATLAR.
+    print("🧠 Bellek optimizasyonu (CPU Offload) devreye alınıyor...")
+    pipe.enable_model_cpu_offload()
+    pipe.enable_vae_slicing()
+    # -----------------------------------------
 
-    pipe = StableDiffusionXLInpaintPipeline.from_pretrained(
-        "ckpt", unet=unet, unet_encoder=unet_encoder, image_encoder=image_encoder,
-        feature_extractor=feature_extractor, text_encoder=text_encoder, text_encoder_2=text_encoder_2,
-        tokenizer=tokenizer, tokenizer_2=tokenizer_2, torch_dtype=torch.float16, use_safetensors=True,
-    ).to(device)
-    pipe.register_modules(unet_encoder=unet_encoder)
+    MODEL = {
+        "pipe": pipe,
+        "parsing": parsing_model,
+        "device": device
+    }
+    print("✅ Sistem Hazır!")
+    return MODEL
 
-    parsing = Parsing(0)
-    openpose = OpenPose(0)
-
-    model = {"pipe": pipe, "parsing": parsing, "openpose": openpose, "device": device}
-    MODEL_LOADED = True
-    print("✅ Sistem Hazır! (v58)")
-    return model
-
-def b64_to_img(b64):
-    if "," in b64: b64 = b64.split(",")[1]
-    return ImageOps.exif_transpose(Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGB"))
+def b64_to_img(b64_str):
+    if "," in b64_str: b64_str = b64_str.split(",")[1]
+    return Image.open(io.BytesIO(base64.b64decode(b64_str))).convert("RGB")
 
 def img_to_b64(img):
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=95)
-    return base64.b64encode(buf.getvalue()).decode()
-
-def smart_resize(img, width, height):
-    img = ImageOps.exif_transpose(img)
-    img.thumbnail((width, height), Image.Resampling.LANCZOS)
-    background = Image.new('RGB', (width, height), (0, 0, 0))
-    background.paste(img, ((width - img.width) // 2, (height - img.height) // 2))
-    return background
+    return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 def handler(job):
-    gc.collect()
-    torch.cuda.empty_cache()
+    print("⚡ İş Başladı")
+    job_input = job["input"]
     
-    print("🚀 HANDLER İŞ ALDI (v58 - ORİJİNAL MOD)")
-    data = job["input"]
-    try:
-        mdl = load_model()
-        human = smart_resize(b64_to_img(data["human_image"]), 768, 1024)
-        garment = smart_resize(b64_to_img(data["garment_image"]), 768, 1024)
-        garment_des = data.get("description", "clothes") 
-        steps = data.get("steps", 30)
-        seed = data.get("seed", 42)
-        
-        device = mdl["device"]
-        pipe = mdl["pipe"]
+    model_data = load_model()
+    pipe = model_data["pipe"]
+    parsing_model = model_data["parsing"]
+    device = model_data["device"]
 
-        with torch.no_grad():
-            # 1. Maske (Parsing Resize Fix - Bu kalmalı, faydalı)
-            try:
-                human_small = human.resize((384, 512))
-                parse_pil = mdl["parsing"](human_small)
-                parse_pil = parse_pil.resize((768, 1024), Image.NEAREST)
-                parse_arr = np.array(parse_pil)
-                if parse_arr.ndim > 2: parse_arr = parse_arr.squeeze()
-                mask_arr = (parse_arr == 4) | (parse_arr == 6) | (parse_arr == 7)
-                if np.sum(mask_arr) < 100: raise Exception("Empty Mask")
-                mask_image = Image.fromarray((mask_arr * 255).astype(np.uint8))
-            except:
-                print("⚠️ Maske bulunamadı, fallback uygulanıyor.")
-                mask_image = Image.new("L", human.size, 0)
-                draw = ImageDraw.Draw(mask_image)
-                w, h = human.size
-                draw.rectangle([w*0.2, h*0.2, w*0.8, h*0.8], fill=255)
-                
-            # 2. OpenPose
-            human_cv = np.array(human)[:, :, ::-1].copy() 
-            pose = None
-            try:
-                raw = mdl["openpose"](human_cv)
-                if isinstance(raw, dict) and "pose_img" in raw: pose = raw["pose_img"]
-                elif isinstance(raw, Image.Image): pose = raw
-            except: pass
-            if pose is None: pose = Image.new("RGB", human.size, (0,0,0))
-            
-            pose_tensor = transforms.ToTensor()(pose).unsqueeze(0).to(device, torch.float16)
-            cloth_tensor = transforms.ToTensor()(garment).unsqueeze(0).to(device, torch.float16)
+    # 1. Resimleri Al ve Resize Et (Bellek için şart)
+    human_img = b64_to_img(job_input["human_image"]).resize((768, 1024))
+    garm_img = b64_to_img(job_input["garment_image"]).resize((768, 1024))
+    garment_des = job_input.get("description", "a cloth")
+    steps = job_input.get("steps", 30)
+    seed = job_input.get("seed", 42)
 
-            # 3. Prompt Logic (App.py'den alınan doğru mantık)
-            prompt = "model is wearing " + garment_des
-            negative_prompt = "monochrome, lowres, bad anatomy, worst quality, low quality"
-            
-            (prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds) = pipe.encode_prompt(
-                prompt, num_images_per_prompt=1, do_classifier_free_guidance=True, negative_prompt=negative_prompt,
-            )
+    # 2. Maske Oluştur (Parsing)
+    model_parse, _ = parsing_model(human_img.resize((384, 512)))
+    mask, _ = parsing_model.get_mask(human_img, model_parse)
+    if mask is None: # Yedek maske yöntemi
+         parse_arr = np.array(model_parse)
+         mask_arr = (parse_arr == 4) | (parse_arr == 6) | (parse_arr == 7)
+         mask = Image.fromarray((mask_arr * 255).astype(np.uint8)).resize((768, 1024))
 
-            prompt_cloth = "a photo of " + garment_des
-            (prompt_embeds_c, _, _, _) = pipe.encode_prompt(
-                prompt_cloth, num_images_per_prompt=1, do_classifier_free_guidance=False, negative_prompt=negative_prompt,
-            )
-            
-            # Pipeline Çalıştırma (Orijinal haliyle)
-            output_tuple = pipe(
-                prompt_embeds=prompt_embeds,
-                negative_prompt_embeds=negative_prompt_embeds,
-                pooled_prompt_embeds=pooled_prompt_embeds,
-                negative_pooled_prompt_embeds=negative_pooled_prompt_embeds,
-                num_inference_steps=steps,
-                guidance_scale=2.0,
-                generator=torch.Generator(device).manual_seed(seed),
-                strength=1.0,
-                pose_img=pose_tensor,
-                text_embeds_cloth=prompt_embeds_c,
-                cloth=cloth_tensor,
-                mask_image=mask_image,
-                image=human, 
-                height=1024,
-                width=768,
-                ip_adapter_image=garment,
-            )
-            
-            final_image = output_tuple[0][0]
-        
-        torch.cuda.empty_cache()
-        return {"output": img_to_b64(final_image)}
-        
-    except Exception as e:
-        import traceback
-        trace = traceback.format_exc()
-        return {"error": str(e), "trace": trace}
+    # 3. İskelet Oluştur (DensePose - Detectron2)
+    # "İskeleti alan" kısım burasıdır.
+    human_img_arg = _apply_exif_orientation(human_img.resize((384, 512)))
+    human_img_arg = convert_PIL_to_numpy(human_img_arg, format="BGR")
+    
+    # Detectron2 argümanları
+    args = apply_net.create_argument_parser().parse_args((
+        'show', './configs/densepose_rcnn_R_50_FPN_s1x.yaml', 
+        './ckpt/densepose/model_final_162be9.pkl', 
+        'dp_segm', '-v', '--opts', 'MODEL.DEVICE', 'cuda'
+    ))
+    pose_img = args.func(args, human_img_arg)
+    pose_img = pose_img[:,:,::-1] # BGR -> RGB
+    pose_img = Image.fromarray(pose_img).resize((768, 1024))
 
-print("🔌 RunPod Başlatılıyor...")
+    # 4. Inference (Giydirme)
+    with torch.no_grad(), torch.cuda.amp.autocast():
+        (prompt_embeds, neg_prompt_embeds, pooled_embeds, neg_pooled_embeds) = pipe.encode_prompt(
+            "model is wearing " + garment_des, 
+            num_images_per_prompt=1, do_classifier_free_guidance=True, 
+            negative_prompt="monochrome, lowres, bad anatomy, worst quality, low quality"
+        )
+        (prompt_embeds_c, _, _, _) = pipe.encode_prompt(
+            "a photo of " + garment_des, 
+            num_images_per_prompt=1, do_classifier_free_guidance=False, 
+            negative_prompt="monochrome, lowres, bad anatomy, worst quality, low quality"
+        )
+
+        tensor_transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize([0.5], [0.5])])
+
+        images = pipe(
+            prompt_embeds=prompt_embeds.to(device, torch.float16),
+            negative_prompt_embeds=neg_prompt_embeds.to(device, torch.float16),
+            pooled_prompt_embeds=pooled_embeds.to(device, torch.float16),
+            negative_pooled_prompt_embeds=neg_pooled_embeds.to(device, torch.float16),
+            num_inference_steps=steps,
+            generator=torch.Generator(device).manual_seed(seed),
+            strength=1.0,
+            pose_img=tensor_transform(pose_img).unsqueeze(0).to(device, torch.float16),
+            text_embeds_cloth=prompt_embeds_c.to(device, torch.float16),
+            cloth=tensor_transform(garm_img).unsqueeze(0).to(device, torch.float16),
+            mask_image=mask,
+            image=human_img,
+            height=1024, width=768,
+            ip_adapter_image=garm_img.resize((768, 1024)),
+            guidance_scale=2.0,
+        )[0]
+
+    return {"image": img_to_b64(images[0])}
+
 runpod.serverless.start({"handler": handler})
